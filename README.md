@@ -30,4 +30,4 @@ npm run start:local
 
 复制 `.env.local.example` 为 `.env.local`，填写飞书登录与发布者白名单；将数据目录设置在代码目录之外。平台本身只监听 `127.0.0.1`，通过 IIS 或 Caddy 提供 HTTPS 域名访问。
 
-详见 [当前实施状态](docs/implementation-status.md) 与 [部署说明](deploy/README.md)。
+Windows 与 Linux 均可通过 GitHub Actions 自托管 Runner 自动部署；Windows 使用受控 Node 进程，Linux 使用 systemd。详见 [当前实施状态](docs/implementation-status.md) 与 [部署说明](deploy/README.md)。

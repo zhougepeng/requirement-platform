@@ -1,0 +1,27 @@
+name: Deploy to Linux server
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: requirement-platform-linux-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, requirement-platform]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and restart requirement platform
+        shell: bash
+        env:
+          REQUIREMENT_PLATFORM_DEPLOY_DIR: ${{ vars.REQUIREMENT_PLATFORM_DEPLOY_DIR }}
+          REQUIREMENT_PLATFORM_SYSTEMD_SERVICE: ${{ vars.REQUIREMENT_PLATFORM_SYSTEMD_SERVICE }}
+        run: |
+          ./deploy/linux/deploy.sh
