@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
 
 type ModelSummary = {
@@ -22,9 +22,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return payload.data;
 }
 
-export function ModelManager() {
+export function ModelManager({ initialOpen = false, hideTrigger = false }: { initialOpen?: boolean; hideTrigger?: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ModelSummary | null>(null);
@@ -32,6 +32,11 @@ export function ModelManager() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!initialOpen) return;
+    void loadModels();
+  }, [initialOpen]);
 
   async function loadModels() {
     setLoading(true);
@@ -102,10 +107,10 @@ export function ModelManager() {
   }
 
   return <>
-    <div className="model-manager-menu">
+    {!hideTrigger ? <div className="model-manager-menu">
       <button className="model-manager-trigger" onClick={() => setMenuOpen((current) => !current)} title="设置" aria-label="设置" aria-expanded={menuOpen}><Icon name="settings" /></button>
       {menuOpen ? <><button className="model-manager-menu-dismiss" aria-label="关闭设置菜单" onClick={() => setMenuOpen(false)} /><div className="model-manager-popover" role="menu"><button role="menuitem" onClick={() => { setMenuOpen(false); setOpen(true); void loadModels(); }}><Icon name="settings" /><span>模型管理</span></button></div></> : null}
-    </div>
+    </div> : null}
     {open ? <div className="model-manager-layer" role="presentation"><button className="model-manager-backdrop" aria-label="关闭模型管理" onClick={() => setOpen(false)} /><section className="model-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="model-manager-title">
       <header><div><h2 id="model-manager-title">模型管理</h2><p>管理需求库 AI 助手使用的模型配置。</p></div><button className="model-manager-close" onClick={() => setOpen(false)} aria-label="关闭模型管理"><Icon name="close" /></button></header>
       <div className="model-manager-body">
