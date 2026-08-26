@@ -1,0 +1,124 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String                  @id @default(cuid())
+  feishuUserId  String                  @unique
+  name          String
+  avatar        String?
+  createdAt     DateTime                @default(now())
+  versions      RequirementVersion[]    @relation("VersionPublisher")
+  comments      Comment[]
+  conversations AssistantConversation[]
+}
+
+model Project {
+  id                  String                  @id @default(cuid())
+  code                String                  @unique
+  name                String
+  description         String
+  outlineCollectionId String?                 @unique
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  requirements        Requirement[]
+  knowledgeDocuments  KnowledgeDocument[]
+  conversations       AssistantConversation[]
+}
+
+model Requirement {
+  id                String                  @id @default(cuid())
+  projectId         String
+  code              String                  @unique
+  title             String
+  outlineDocumentId String?                 @unique
+  currentVersionId  String?                 @unique
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  project           Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  currentVersion    RequirementVersion?     @relation("CurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  versions          RequirementVersion[]    @relation("RequirementVersions")
+  comments          Comment[]
+  conversations     AssistantConversation[]
+
+  @@index([projectId, updatedAt])
+}
+
+model DemoArtifact {
+  id            String               @id @default(cuid())
+  storageKey    String               @unique
+  originalName  String
+  entryFile     String
+  checksum      String
+  contentLength Int
+  localDirectory String?
+  createdAt     DateTime             @default(now())
+  versions      RequirementVersion[]
+}
+
+model RequirementVersion {
+  id                String       @id @default(cuid())
+  requirementId     String
+  versionNo         Int
+  outlineRevisionId String?
+  demoArtifactId    String
+  demoPath          String
+  demoEntryUrl      String
+  changeSummary     String
+  prdMarkdown       String       @db.Text
+  prdChecksum       String
+  demoChecksum      String
+  publisherId       String
+  createdAt         DateTime     @default(now())
+  requirement       Requirement  @relation("RequirementVersions", fields: [requirementId], references: [id], onDelete: Restrict)
+  currentFor        Requirement? @relation("CurrentVersion")
+  artifact          DemoArtifact @relation(fields: [demoArtifactId], references: [id], onDelete: Restrict)
+  publisher         User         @relation("VersionPublisher", fields: [publisherId], references: [id], onDelete: Restrict)
+  comments          Comment[]
+
+  @@unique([requirementId, versionNo])
+  @@index([requirementId, createdAt])
+}
+
+model Comment {
+  id            String             @id @default(cuid())
+  requirementId String
+  versionId     String
+  userId        String
+  replyToId     String?
+  content       String
+  createdAt     DateTime           @default(now())
+  requirement   Requirement        @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  version       RequirementVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  user          User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  replyTo       Comment?           @relation("CommentReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies       Comment[]          @relation("CommentReplies")
+
+  @@index([requirementId, versionId, createdAt])
+}
+
+model KnowledgeDocument {
+  id                String   @id @default(cuid())
+  projectId         String?
+  outlineDocumentId String   @unique
+  title             String
+  type              String
+  createdAt         DateTime @default(now())
+  project           Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+}
+
+model AssistantConversation {
+  id            String       @id @default(cuid())
+  userId        String
+  projectId     String?
+  requirementId String?
+  createdAt     DateTime     @default(now())
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project       Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  requirement   Requirement? @relation(fields: [requirementId], references: [id], onDelete: SetNull)
+}

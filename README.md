@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 需求管理平台
 
-## Getting Started
+独立的产品需求发布、版本查看、Demo 预览和版本讨论平台。
 
-First, run the development server:
+面向小团队：一个本机 Node.js 服务即可完成 Demo 上传、PRD 发布、历史查看、评论和 MCP 自动化发布。
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## 本地启动
+
+```powershell
+npm install
+npm run build
+npm run start:local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+打开 `http://127.0.0.1:3000/`，或使用永久版本链接：
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```text
+/r/ERP-001
+/r/ERP-001?v=1
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+开发阶段默认使用本地管理员身份，不需要填写 `FEISHU_ADMIN_OPEN_IDS`。左侧底部设置可以直接打开“员工与权限”和“模型管理”；用户菜单中的“飞书登录”用于在已配置飞书应用时切换到真实组织权限模式。
 
-## Learn More
+## 发布 API
 
-To learn more about Next.js, take a look at the following resources:
+1. `POST /api/v1/artifacts`，以 multipart `file` 上传根目录包含 `index.html` 的 `demo.zip`。
+2. `POST /api/v1/requirements/publish`，传入 `project_code`、`requirement_code`、`title`、`prd_markdown`、`artifact_id`、`change_summary`。
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 外网服务器
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+复制 `.env.local.example` 为 `.env.local`，填写飞书登录与发布者白名单；将数据目录设置在代码目录之外。平台本身只监听 `127.0.0.1`，通过 IIS 或 Caddy 提供 HTTPS 域名访问。
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+详见 [当前实施状态](docs/implementation-status.md) 与 [部署说明](deploy/README.md)。

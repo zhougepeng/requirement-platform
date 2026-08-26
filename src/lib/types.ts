@@ -1,0 +1,75 @@
+export type RequirementVersion = {
+  id: string;
+  requirementCode: string;
+  number: number;
+  publishedAt: string;
+  publisher: string;
+  changeSummary: string;
+  prd: string;
+  demoEntryUrl: string;
+  artifactId: string;
+};
+
+export type RequirementComment = {
+  id: string;
+  requirementCode: string;
+  versionId: string;
+  author: string;
+  initials: string;
+  tone: "blue" | "green" | "violet";
+  createdAt: string;
+  content: string;
+};
+
+export type RequirementSummary = {
+  code: string;
+  title: string;
+  latestVersion: number;
+  createdAt?: string;
+  updatedAt?: string;
+  owner?: string;
+};
+
+export type Project = {
+  id: string;
+  name: string;
+  description: string;
+  createdAt?: string;
+  updatedAt: string;
+  owner?: string;
+  requirements: RequirementSummary[];
+};
+
+export type Requirement = {
+  id: string;
+  projectId: string;
+  code: string;
+  title: string;
+  currentVersionId: string;
+  createdAt: string;
+  updatedAt: string;
+  owner?: string;
+};
+
+export type DemoArtifact = {
+  id: string;
+  originalFileName: string;
+  entryFile: string;
+  checksum: string;
+  createdAt: string;
+};
+
+export type RequirementStore = {
+  schemaVersion: 1;
+  projects: Project[];
+  requirements: Requirement[];
+  versions: RequirementVersion[];
+  comments: RequirementComment[];
+  artifacts: DemoArtifact[];
+};
+
+export type RequirementDetail = {
+  project: Project;
+  requirement: Requirement;
+  currentVersion: RequirementVersion;
+};

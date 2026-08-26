@@ -32,6 +32,11 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+/deploy/local.env
+/deploy/outline.env
+
+# local runtime state and unpacked demo artifacts
+/data/requirement-platform/
 
 # vercel
 .vercel

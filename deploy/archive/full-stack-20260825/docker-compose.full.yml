@@ -1,0 +1,129 @@
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: requirement_platform
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init/01-databases.sql:/docker-entrypoint-initdb.d/01-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d requirement_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.1
+    command: start-dev --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: ${POSTGRES_USER:?Set POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USERNAME:-local-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?Set KC_ADMIN_PASSWORD}
+      KC_HOSTNAME: http://host.docker.internal:8400
+      KC_HEALTH_ENABLED: "true"
+      KC_OUTLINE_CLIENT_SECRET: ${KC_OUTLINE_CLIENT_SECRET:?Set KC_OUTLINE_CLIENT_SECRET}
+      KC_OUTLINE_USER_PASSWORD: ${KC_OUTLINE_USER_PASSWORD:?Set KC_OUTLINE_USER_PASSWORD}
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "127.0.0.1:8400:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  minio:
+    image: ${MINIO_IMAGE:?Set an approved pinned MINIO_IMAGE}
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "127.0.0.1:9001:9001"
+
+  outline:
+    image: ${OUTLINE_IMAGE:?Set an approved pinned OUTLINE_IMAGE}
+    env_file:
+      - ./outline.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    restart: on-failure
+    ports:
+      - "127.0.0.1:3002:3000"
+
+  requirement-platform:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      REQUIREMENT_PLATFORM_STORE: postgres
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      MCP_API_TOKEN: ${MCP_API_TOKEN:?Set MCP_API_TOKEN}
+      OUTLINE_BASE_URL: ${OUTLINE_BASE_URL:-}
+      OUTLINE_API_KEY: ${OUTLINE_API_KEY:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:?Set S3_ENDPOINT}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?Set S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?Set S3_SECRET_ACCESS_KEY}
+      S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      APP_BASE_URL: ${APP_BASE_URL:-}
+      AUTH_MODE: ${AUTH_MODE:-feishu}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-}
+      FEISHU_ALLOWED_TENANT_KEYS: ${FEISHU_ALLOWED_TENANT_KEYS:-}
+      AI_API_BASE_URL: ${AI_API_BASE_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      prisma-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - requirement-data:/app/data
+      - requirement-demos:/app/public/demos/published
+
+  prisma-migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: build
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  requirement-data:
+  requirement-demos:

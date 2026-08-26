@@ -1,0 +1,4 @@
+# Deliberately empty: the default deployment is one Node.js service with
+# filesystem-backed data. The former PostgreSQL/Redis/MinIO/Outline stack is
+# preserved under deploy/archive/full-stack-20260825 for future evaluation.
+services: {}
