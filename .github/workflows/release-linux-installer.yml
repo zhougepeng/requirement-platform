@@ -33,10 +33,13 @@ jobs:
         run: |
           npm ci
           npm run build
-          mkdir -p bundle/payload/.next
+          mkdir -p bundle/payload/.next/standalone/.next
           cp -a .next/standalone bundle/payload/.next/
-          cp -a .next/static bundle/payload/.next/static
-          if [[ -d public ]]; then cp -a public bundle/payload/public; fi
+          cp -a .next/static bundle/payload/.next/standalone/.next/static
+          if [[ -d public ]]; then cp -a public bundle/payload/.next/standalone/public; fi
+          test -f bundle/payload/.next/standalone/server.js
+          test -d bundle/payload/.next/standalone/.next/static
+          test -d bundle/payload/.next/standalone/public
           cp deploy/linux/requirement-platform.service.template bundle/payload/
           cp deploy/linux/server.env.example bundle/payload/
           printf '%s\n' "$RELEASE_TAG" > bundle/payload/VERSION

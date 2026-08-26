@@ -10,7 +10,7 @@ if [[ -z "$PLATFORM_ROOT" || -z "$ARTIFACT_ROOT" ]]; then
   echo "Usage: REQUIREMENT_PLATFORM_DEPLOY_DIR=/opt/requirement-platform $0 <release-directory>" >&2
   exit 1
 fi
-if [[ ! -f "$ARTIFACT_ROOT/.next/standalone/server.js" || ! -d "$ARTIFACT_ROOT/.next/static" ]]; then
+if [[ ! -f "$ARTIFACT_ROOT/.next/standalone/server.js" || ! -d "$ARTIFACT_ROOT/.next/standalone/.next/static" || ! -d "$ARTIFACT_ROOT/.next/standalone/public" ]]; then
   echo "Release artifact is incomplete: standalone server or static assets are missing." >&2
   exit 1
 fi
@@ -50,7 +50,7 @@ if ! sudo systemctl restart "$SERVICE_NAME"; then
 fi
 
 for _ in {1..10}; do
-  if curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/" >/dev/null; then
+  if curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/" >/dev/null && find "$NEXT_RELEASE/.next/standalone/.next/static" -type f -name '*.js' -print -quit | grep -q .; then
     echo "Requirement platform deployed and healthy on port ${PORT}."
     exit 0
   fi

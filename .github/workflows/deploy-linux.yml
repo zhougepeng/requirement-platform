@@ -26,10 +26,13 @@ jobs:
         run: |
           npm ci
           npm run build
-          mkdir -p release/.next
+          mkdir -p release/.next/standalone/.next
           cp -a .next/standalone release/
-          cp -a .next/static release/.next/static
-          if [[ -d public ]]; then cp -a public release/public; fi
+          cp -a .next/static release/.next/standalone/.next/static
+          if [[ -d public ]]; then cp -a public release/.next/standalone/public; fi
+          test -f release/.next/standalone/server.js
+          test -d release/.next/standalone/.next/static
+          test -d release/.next/standalone/public
       - uses: actions/upload-artifact@v4
         with:
           name: requirement-platform-linux-release

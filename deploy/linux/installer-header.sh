@@ -33,7 +33,7 @@ temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
 tail -n "+$archive_line" "$0" | tar -xzf - -C "$temporary_root"
 payload="$temporary_root/payload"
-if [[ ! -f "$payload/.next/standalone/server.js" || ! -d "$payload/.next/static" || ! -f "$payload/VERSION" ]]; then
+if [[ ! -f "$payload/.next/standalone/server.js" || ! -d "$payload/.next/standalone/.next/static" || ! -d "$payload/.next/standalone/public" || ! -f "$payload/VERSION" ]]; then
   echo "Installer payload is incomplete." >&2
   exit 1
 fi
@@ -79,7 +79,7 @@ if ! systemctl enable --now "$SERVICE_NAME"; then
 fi
 
 for _ in {1..10}; do
-  if curl --fail --silent --show-error --max-time 3 http://127.0.0.1:3000/ >/dev/null; then
+  if curl --fail --silent --show-error --max-time 3 http://127.0.0.1:3000/ >/dev/null && find "$release_dir/.next/standalone/.next/static" -type f -name '*.js' -print -quit | grep -q .; then
     echo "Requirement Platform $release_id installed successfully."
     exit 0
   fi
