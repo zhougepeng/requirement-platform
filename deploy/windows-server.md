@@ -35,6 +35,12 @@
 - 每日备份整个 `D:\RequirementPlatform\data` 目录。它包含版本元数据、Demo 原始工件和已发布 Demo，缺少其中任何一项都不能完整恢复。
 - 升级代码前先备份数据目录；升级只替换应用目录，不替换数据目录。
 
+## GitHub 自动部署
+
+推荐在 Windows 服务器安装 GitHub Actions 自托管 Runner。每次推送 `main` 后，服务器会安全拉取代码、构建并重启本机服务；不需要向 GitHub 保存远程桌面或 SSH 登录信息。
+
+完整操作见 [GitHub 自动部署说明](windows/github-actions.md)。
+
 ## 验收
 
 1. 未登录打开域名会跳转飞书登录；开发模式页面底部也可随时点击“飞书登录”进入授权。

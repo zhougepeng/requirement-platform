@@ -1,0 +1,29 @@
+name: Deploy to Windows server
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: requirement-platform-windows-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, windows, requirement-platform]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and restart requirement platform
+        shell: powershell
+        env:
+          REQUIREMENT_PLATFORM_DEPLOY_DIR: ${{ vars.REQUIREMENT_PLATFORM_DEPLOY_DIR }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:REQUIREMENT_PLATFORM_DEPLOY_DIR)) {
+            throw "请先在 GitHub 仓库 Variables 中设置 REQUIREMENT_PLATFORM_DEPLOY_DIR。"
+          }
+          & .\deploy\windows\deploy.ps1 -DeployRoot $env:REQUIREMENT_PLATFORM_DEPLOY_DIR
