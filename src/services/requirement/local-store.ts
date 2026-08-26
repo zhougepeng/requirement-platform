@@ -96,14 +96,9 @@ async function publishArtifactFiles(artifact: DemoArtifact, projectCode: string,
   const destination = path.join(PUBLISHED_DEMO_DIR, projectCode, requirementCode, `v${versionNo}`);
   const source = path.join(artifactRoot, artifact.entryFile);
   await stat(source);
-  await mkdir(path.dirname(destination), { recursive: true });
-  try {
-    await stat(path.join(destination, artifact.entryFile));
-    return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/${artifact.entryFile}`;
-  } catch {
-    await cp(artifactRoot, destination, { recursive: true, force: false, errorOnExist: true });
-    return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/${artifact.entryFile}`;
-  }
+  await mkdir(destination, { recursive: true });
+  await cp(artifactRoot, destination, { recursive: true, force: true });
+  return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/${artifact.entryFile}`;
 }
 
 async function ensureStore(): Promise<RequirementStore> {
