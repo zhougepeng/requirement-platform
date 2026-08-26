@@ -42,6 +42,7 @@ jobs:
           test -d bundle/payload/.next/standalone/public
           cp deploy/linux/requirement-platform.service.template bundle/payload/
           cp deploy/linux/server.env.example bundle/payload/
+          cp deploy/linux/requirement-platform-updater bundle/payload/
           printf '%s\n' "$RELEASE_TAG" > bundle/payload/VERSION
           tar -C bundle -czf bundle/payload.tar.gz payload
           cat deploy/linux/installer-header.sh > bundle/requirement-platform-linux-x64.run

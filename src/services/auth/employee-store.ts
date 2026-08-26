@@ -13,6 +13,8 @@ const EMPLOYEE_FILE = path.join(DATA_DIR, "employees.local.json");
 type StoredEmployee = {
   id: string;
   openId: string;
+  unionId?: string;
+  userId?: string;
   name: string;
   avatarUrl?: string;
   tenantKey?: string;
@@ -28,7 +30,7 @@ type StoredEmployee = {
 type EmployeeStore = { schemaVersion: 1; employees: StoredEmployee[] };
 
 export type EmployeeSummary = Omit<StoredEmployee, "id"> & { id: string };
-export type EmployeeLogin = Pick<StoredEmployee, "openId" | "name" | "avatarUrl" | "tenantKey">;
+export type EmployeeLogin = Pick<StoredEmployee, "openId" | "unionId" | "userId" | "name" | "avatarUrl" | "tenantKey">;
 
 let mutationQueue = Promise.resolve();
 
@@ -52,10 +54,6 @@ function isBootstrapAdmin(openId: string) {
 
 function isBootstrapPublisher(openId: string) {
   return csv("FEISHU_PUBLISHER_OPEN_IDS").includes(openId);
-}
-
-function hasEnabledAdmin(store: EmployeeStore) {
-  return store.employees.some((item) => item.enabled && item.isAdmin && item.directoryActive);
 }
 
 async function readStore(): Promise<EmployeeStore> {
@@ -118,11 +116,11 @@ export async function registerLoginEmployee(input: EmployeeLogin) {
   return mutate((store) => {
     const timestamp = now();
     const existing = store.employees.find((item) => item.openId === input.openId);
-    // 开发/首次部署不要求提前知道 open_id：没有可用管理员时，首个成功登录的人接管管理权限。
-    const shouldBootstrap = !hasEnabledAdmin(store) && !isBootstrapAdmin(input.openId);
     if (existing) {
       Object.assign(existing, {
         name: input.name,
+        unionId: input.unionId,
+        userId: input.userId,
         avatarUrl: input.avatarUrl,
         tenantKey: input.tenantKey,
         directoryActive: true,
@@ -133,28 +131,27 @@ export async function registerLoginEmployee(input: EmployeeLogin) {
         existing.enabled = true;
         existing.isAdmin = true;
       }
-      if (shouldBootstrap) {
-        existing.enabled = true;
-        existing.isAdmin = true;
-      }
       if (isBootstrapPublisher(input.openId)) existing.enabled = true;
       return summary(existing);
     }
     const employee: StoredEmployee = {
       id: `employee_${randomUUID().replaceAll("-", "")}`,
       openId: input.openId,
+      unionId: input.unionId,
+      userId: input.userId,
       name: input.name,
       avatarUrl: input.avatarUrl,
       tenantKey: input.tenantKey,
       departmentNames: [],
-      enabled: isBootstrapAdmin(input.openId) || isBootstrapPublisher(input.openId),
-      isAdmin: isBootstrapAdmin(input.openId) || shouldBootstrap,
+      // 已在飞书回调中完成指定企业校验，新成员默认可用；管理员后续仍可手动停用。
+      enabled: true,
+      // 默认成员。管理员必须由环境变量显式指定，或由已有管理员在页面中授予。
+      isAdmin: isBootstrapAdmin(input.openId),
       directoryActive: true,
       createdAt: timestamp,
       updatedAt: timestamp,
       lastLoginAt: timestamp,
     };
-    if (shouldBootstrap) employee.enabled = true;
     store.employees.push(employee);
     return summary(employee);
   });

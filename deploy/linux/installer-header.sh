@@ -10,8 +10,8 @@ if [[ "$(uname -m)" != "x86_64" ]]; then
   echo "This installer supports Linux x86_64 only." >&2
   exit 1
 fi
-if ! command -v systemctl >/dev/null || ! command -v node >/dev/null; then
-  echo "systemd and a system-level Node.js 20+ installation are required." >&2
+if ! command -v systemctl >/dev/null || ! command -v node >/dev/null || ! command -v curl >/dev/null || ! command -v sudo >/dev/null; then
+  echo "systemd, curl, sudo, and a system-level Node.js 20+ installation are required." >&2
   exit 1
 fi
 node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
@@ -33,7 +33,7 @@ temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
 tail -n "+$archive_line" "$0" | tar -xzf - -C "$temporary_root"
 payload="$temporary_root/payload"
-if [[ ! -f "$payload/.next/standalone/server.js" || ! -d "$payload/.next/standalone/.next/static" || ! -d "$payload/.next/standalone/public" || ! -f "$payload/VERSION" ]]; then
+if [[ ! -f "$payload/.next/standalone/server.js" || ! -d "$payload/.next/standalone/.next/static" || ! -d "$payload/.next/standalone/public" || ! -f "$payload/VERSION" || ! -f "$payload/requirement-platform-updater" ]]; then
   echo "Installer payload is incomplete." >&2
   exit 1
 fi
@@ -63,6 +63,11 @@ if [[ -e "$release_dir" ]]; then rm -rf "$release_dir"; fi
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$release_dir"
 cp -a "$payload/." "$release_dir/"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$release_dir"
+
+install -m 750 -o root -g root "$release_dir/requirement-platform-updater" /usr/local/sbin/requirement-platform-updater
+printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/requirement-platform-updater --start\n' "$SERVICE_USER" > /etc/sudoers.d/requirement-platform-updater
+chmod 440 /etc/sudoers.d/requirement-platform-updater
+visudo -cf /etc/sudoers.d/requirement-platform-updater >/dev/null
 
 sed "s|__PLATFORM_ROOT__|$PLATFORM_ROOT|g" "$release_dir/requirement-platform.service.template" > "/etc/systemd/system/$SERVICE_NAME.service"
 systemctl daemon-reload

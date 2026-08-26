@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLATFORM_ROOT="${REQUIREMENT_PLATFORM_INSTALL_DIR:-/opt/requirement-platform}"
+SERVICE_NAME="${REQUIREMENT_PLATFORM_SYSTEMD_SERVICE:-requirement-platform}"
+UNIT_NAME="${REQUIREMENT_PLATFORM_UPDATE_UNIT:-requirement-platform-updater}"
+INSTALLER_URL="https://github.com/zhougepeng/requirement-platform/releases/latest/download/requirement-platform-linux-x64.run"
+LOG_FILE="$PLATFORM_ROOT/update.log"
+LOCK_DIR="$PLATFORM_ROOT/.update-lock"
+
+if [[ "${EUID}" -ne 0 ]]; then
+  echo "This updater must run as root." >&2
+  exit 1
+fi
+
+run_update() {
+  install -d -m 755 "$PLATFORM_ROOT"
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "[$(date -Is)] An update is already running." >>"$LOG_FILE"
+    exit 0
+  fi
+  temporary_installer="$(mktemp /tmp/requirement-platform-update.XXXXXX.run)"
+  trap 'rm -f "$temporary_installer"; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+  {
+    echo "[$(date -Is)] Downloading the latest Requirement Platform installer."
+    curl --fail --location --retry 3 --connect-timeout 15 --max-time 300 -o "$temporary_installer" "$INSTALLER_URL"
+    chmod 700 "$temporary_installer"
+    echo "[$(date -Is)] Installing the downloaded release."
+    bash "$temporary_installer"
+    echo "[$(date -Is)] Update completed."
+  } >>"$LOG_FILE" 2>&1
+}
+
+case "${1:-}" in
+  --start)
+    systemd-run --quiet --unit="${UNIT_NAME}-$(date +%s)-$RANDOM" --property=Type=oneshot "$0" --apply
+    echo "Update job started."
+    ;;
+  --apply)
+    run_update
+    ;;
+  *)
+    echo "Usage: $0 --start" >&2
+    exit 2
+    ;;
+esac

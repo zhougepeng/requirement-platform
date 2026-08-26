@@ -1,95 +1,106 @@
 import "server-only";
 
 import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const EXPECTED_REMOTES = new Set([
-  "https://github.com/zhougepeng/requirement-platform.git",
-  "git@github.com:zhougepeng/requirement-platform.git",
-]);
+const RELEASE_API = "https://api.github.com/repos/zhougepeng/requirement-platform/releases/latest";
+const INSTALLER_NAME = "requirement-platform-linux-x64.run";
+const UPDATER_PATH = "/usr/local/sbin/requirement-platform-updater";
 
-export type GithubUpdateStatus = {
-  branch: string;
-  currentCommit: string;
-  remoteCommit: string;
-  ahead: number;
-  behind: number;
-  dirty: boolean;
+type GithubRelease = {
+  tag_name?: string;
+  assets?: Array<{ name?: string; browser_download_url?: string }>;
+};
+
+export type InstallerUpdateStatus = {
+  currentVersion: string;
+  latestVersion: string;
+  installerName: string;
   updateAvailable: boolean;
-  canPull: boolean;
+  canInstall: boolean;
   blockedReason?: string;
 };
 
-function repositoryRoot() {
-  return process.env.REQUIREMENT_PLATFORM_REPO_DIR?.trim() || process.cwd();
+function installRoot() {
+  return process.env.REQUIREMENT_PLATFORM_INSTALL_DIR?.trim() || "/opt/requirement-platform";
 }
 
-async function git(args: string[]) {
-  const result = await execFileAsync("git", ["-C", repositoryRoot(), ...args], {
-    windowsHide: true,
-    timeout: 20_000,
-    maxBuffer: 1024 * 1024,
-  });
-  return result.stdout.trim();
-}
-
-async function ensureRepository() {
+function currentVersion() {
+  const versionFile = join(installRoot(), "current", "VERSION");
   try {
-    if (await git(["rev-parse", "--is-inside-work-tree"]) !== "true") throw new Error("not a repository");
+    return existsSync(versionFile) ? readFileSync(versionFile, "utf8").trim() || "未知版本" : "开发环境";
   } catch {
-    throw new Error("当前部署目录不是 Git 仓库，无法从 GitHub 更新。");
+    return "未知版本";
   }
-  const [branch, remote] = await Promise.all([git(["branch", "--show-current"]), git(["remote", "get-url", "origin"])]);
-  if (branch !== "main") throw new Error("当前不在 main 分支，已拒绝自动更新。");
-  if (!EXPECTED_REMOTES.has(remote)) throw new Error("远端仓库不是已配置的需求库 GitHub 地址，已拒绝自动更新。");
-  return branch;
 }
 
-function parseCounts(value: string) {
-  const [ahead = "0", behind = "0"] = value.trim().split(/\s+/);
-  return { ahead: Number(ahead) || 0, behind: Number(behind) || 0 };
+function versionParts(value: string) {
+  return value.replace(/^v/i, "").split(/[._-]/).map((item) => Number(item) || 0);
 }
 
-export async function checkGithubUpdate(fetchRemote = true): Promise<GithubUpdateStatus> {
-  const branch = await ensureRepository();
-  if (fetchRemote) {
-    try {
-      await git(["fetch", "--quiet", "origin", branch]);
-    } catch {
-      throw new Error("无法连接 GitHub 检查更新，请确认服务器网络与 Git 凭据。");
-    }
+function hasNewerVersion(current: string, latest: string) {
+  if (!/^v\d/.test(current) || !/^v\d/.test(latest)) return current !== latest;
+  const left = versionParts(current);
+  const right = versionParts(latest);
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    if ((right[index] || 0) !== (left[index] || 0)) return (right[index] || 0) > (left[index] || 0);
   }
+  return false;
+}
+
+async function latestRelease() {
+  let response: Response;
   try {
-    const [currentCommit, remoteCommit, count, changes] = await Promise.all([
-      git(["rev-parse", "--short", "HEAD"]),
-      git(["rev-parse", "--short", `origin/${branch}`]),
-      git(["rev-list", "--left-right", "--count", `HEAD...origin/${branch}`]),
-      git(["status", "--porcelain"]),
-    ]);
-    const { ahead, behind } = parseCounts(count);
-    const dirty = Boolean(changes);
-    const updateAvailable = behind > 0;
-    const blockedReason = dirty
-      ? "当前服务器有未提交修改，不能安全拉取更新。"
-      : ahead > 0
-        ? "当前服务器存在未推送提交，不能自动合并远端更新。"
-        : undefined;
-    return { branch, currentCommit, remoteCommit, ahead, behind, dirty, updateAvailable, canPull: updateAvailable && !blockedReason, blockedReason };
+    response = await fetch(RELEASE_API, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "requirement-platform-updater" },
+      signal: AbortSignal.timeout(15_000),
+      cache: "no-store",
+    });
   } catch {
-    throw new Error("无法读取 GitHub 更新状态，请确认 origin/main 已正确配置。");
+    throw new Error("无法连接 GitHub Release，请确认服务器可以访问 github.com。");
   }
+  if (!response.ok) throw new Error(`无法读取 GitHub Release（HTTP ${response.status}）。`);
+  const release = (await response.json()) as GithubRelease;
+  const version = release.tag_name?.trim();
+  const asset = release.assets?.find((item) => item.name === INSTALLER_NAME);
+  if (!version || !asset?.browser_download_url) throw new Error("最新 GitHub Release 未包含 Linux 安装包。");
+  return { version };
 }
 
-export async function pullGithubUpdate() {
-  const before = await checkGithubUpdate(true);
-  if (!before.updateAvailable) return { ...before, updated: false, restartRequired: false };
-  if (before.dirty || before.ahead > 0) throw new Error(before.blockedReason || "当前代码不能安全更新。");
+function updaterAvailable() {
+  return process.platform === "linux" && existsSync(UPDATER_PATH);
+}
+
+export async function checkInstallerUpdate(): Promise<InstallerUpdateStatus> {
+  const [current, release] = await Promise.all([Promise.resolve(currentVersion()), latestRelease()]);
+  const updateAvailable = hasNewerVersion(current, release.version);
+  const blockedReason = process.platform !== "linux"
+    ? "自动安装包更新仅支持已安装的 Linux 服务器。"
+    : !updaterAvailable()
+      ? "当前安装包尚未包含自动更新助手；请先手动安装一次最新安装包，之后即可在页面内自动更新。"
+      : undefined;
+  return {
+    currentVersion: current,
+    latestVersion: release.version,
+    installerName: INSTALLER_NAME,
+    updateAvailable,
+    canInstall: updateAvailable && !blockedReason,
+    blockedReason,
+  };
+}
+
+export async function startInstallerUpdate() {
+  const status = await checkInstallerUpdate();
+  if (!status.updateAvailable) return { ...status, started: false };
+  if (!status.canInstall) throw new Error(status.blockedReason || "当前无法自动安装更新。");
   try {
-    await git(["pull", "--ff-only", "origin", before.branch]);
+    await execFileAsync("sudo", ["-n", UPDATER_PATH, "--start"], { timeout: 15_000, maxBuffer: 64 * 1024 });
   } catch {
-    throw new Error("GitHub 更新无法快速合并，未修改当前代码。请先在服务器处理分支差异。");
+    throw new Error("无法启动更新助手。请确认安装包已完成自动更新助手配置，且服务账号具备受控更新权限。");
   }
-  const after = await checkGithubUpdate(false);
-  return { ...after, updated: true, restartRequired: true };
+  return { ...status, started: true };
 }

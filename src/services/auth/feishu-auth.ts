@@ -1,60 +1,119 @@
 import "server-only";
 
-type FeishuEnvelope<T> = { code?: number; msg?: string; data?: T };
+type FeishuEnvelope<T> = { code?: number; msg?: string; data?: T } & T;
 type FeishuToken = { app_access_token?: string };
 type TenantToken = { tenant_access_token?: string };
 type LoginToken = { access_token?: string };
-type FeishuUser = { open_id?: string; name?: string; avatar_url?: string; tenant_key?: string };
+type FeishuUser = { open_id?: string; union_id?: string; user_id?: string; name?: string; avatar_url?: string; tenant_key?: string };
 
 const API = "https://open.feishu.cn/open-apis";
+const QR_AUTHORIZE = "https://passport.feishu.cn/suite/passport/oauth/authorize";
+
+export class FeishuLoginError extends Error {
+  constructor(public readonly kind: "configuration" | "unauthorized_tenant" | "remote") {
+    super(kind);
+  }
+}
 
 function configuration() {
-  const appId = process.env.FEISHU_APP_ID;
-  const appSecret = process.env.FEISHU_APP_SECRET;
-  const baseUrl = process.env.APP_BASE_URL?.replace(/\/$/, "");
-  if (!appId || !appSecret || !baseUrl) throw new Error("飞书登录尚未配置。请设置 FEISHU_APP_ID、FEISHU_APP_SECRET 和 APP_BASE_URL。");
-  return { appId, appSecret, baseUrl };
+  const appId = process.env.FEISHU_APP_ID?.trim();
+  const appSecret = process.env.FEISHU_APP_SECRET?.trim();
+  const configuredRedirect = process.env.FEISHU_REDIRECT_URI?.trim();
+  const baseUrl = process.env.APP_BASE_URL?.trim().replace(/\/$/, "");
+  const redirectUri = configuredRedirect || (baseUrl ? `${baseUrl}/auth/callback` : "");
+  const allowedTenantKey = process.env.FEISHU_ALLOWED_TENANT_KEY?.trim()
+    || (process.env.FEISHU_ALLOWED_TENANT_KEYS ?? "").split(",").map((item) => item.trim()).filter(Boolean)[0];
+  if (!appId || !appSecret || !redirectUri || !allowedTenantKey)
+    throw new FeishuLoginError("configuration");
+  try {
+    const parsed = new URL(redirectUri);
+    if (!/^https?:$/.test(parsed.protocol)) throw new Error("protocol");
+  } catch {
+    throw new FeishuLoginError("configuration");
+  }
+  return { appId, appSecret, redirectUri, allowedTenantKey };
+}
+
+export function isFeishuLoginConfigured() {
+  try {
+    configuration();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fetchEnvelope<T>(url: string, init: RequestInit) {
-  const response = await fetch(url, { ...init, cache: "no-store", signal: AbortSignal.timeout(15_000) });
-  const payload = await response.json() as FeishuEnvelope<T>;
-  if (!response.ok || payload.code !== 0 || !payload.data) throw new Error(`飞书登录请求失败：${payload.code ?? response.status}`);
-  return payload.data;
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, cache: "no-store", signal: AbortSignal.timeout(15_000) });
+  } catch {
+    throw new FeishuLoginError("remote");
+  }
+  const payload = await response.json().catch(() => ({})) as FeishuEnvelope<T>;
+  if (!response.ok || payload.code !== 0) throw new FeishuLoginError("remote");
+  return payload;
+}
+
+/**
+ * 飞书二维码 SDK 当前仍要求使用旧版授权页；二维码 SDK 的 goto 必须使用该地址。
+ * 该地址只包含公开的 App ID、回调地址和一次性 state，不包含 App Secret 或用户 Token。
+ */
+export function getFeishuQrGotoUrl(state: string) {
+  const { appId, redirectUri } = configuration();
+  const url = new URL(QR_AUTHORIZE);
+  url.searchParams.set("client_id", appId);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("state", state);
+  return url.toString();
 }
 
 export function getFeishuLoginUrl(state: string) {
-  const { appId, baseUrl } = configuration();
+  const { appId, redirectUri } = configuration();
   const url = new URL(`${API}/authen/v1/index`);
   url.searchParams.set("app_id", appId);
-  url.searchParams.set("redirect_uri", `${baseUrl}/auth/callback`);
+  url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
   return url.toString();
 }
 
 export async function exchangeCode(code: string) {
-  const { appId, appSecret } = configuration();
+  const { appId, appSecret, allowedTenantKey } = configuration();
   const appToken = await fetchEnvelope<FeishuToken>(`${API}/auth/v3/app_access_token/internal`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
   });
-  if (!appToken.app_access_token) throw new Error("飞书未返回应用访问凭证。");
+  if (!appToken.app_access_token) throw new FeishuLoginError("remote");
   const loginToken = await fetchEnvelope<LoginToken>(`${API}/authen/v1/access_token`, {
-    method: "POST", headers: { Authorization: `Bearer ${appToken.app_access_token}`, "Content-Type": "application/json" },
+    method: "POST",
+    headers: { Authorization: `Bearer ${appToken.app_access_token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ grant_type: "authorization_code", code }),
   });
-  if (!loginToken.access_token) throw new Error("飞书未返回用户访问凭证。");
-  const user = await fetchEnvelope<FeishuUser>(`${API}/authen/v1/user_info`, { headers: { Authorization: `Bearer ${loginToken.access_token}` } });
-  if (!user.open_id || !user.name) throw new Error("飞书未返回可用用户信息。");
-  const allowedTenants = (process.env.FEISHU_ALLOWED_TENANT_KEYS ?? "").split(",").map((item) => item.trim()).filter(Boolean);
-  if (allowedTenants.length && (!user.tenant_key || !allowedTenants.includes(user.tenant_key))) throw new Error("当前飞书租户未获准访问需求平台。");
-  return { openId: user.open_id, name: user.name, avatarUrl: user.avatar_url, tenantKey: user.tenant_key };
+  if (!loginToken.data?.access_token) throw new FeishuLoginError("remote");
+  const user = await fetchEnvelope<FeishuUser>(`${API}/authen/v1/user_info`, {
+    headers: { Authorization: `Bearer ${loginToken.data.access_token}` },
+  });
+  if (!user.data?.open_id || !user.data.name || !user.data.tenant_key) throw new FeishuLoginError("remote");
+  if (user.data.tenant_key !== allowedTenantKey) throw new FeishuLoginError("unauthorized_tenant");
+  return {
+    openId: user.data.open_id,
+    unionId: user.data.union_id,
+    userId: user.data.user_id,
+    name: user.data.name,
+    avatarUrl: user.data.avatar_url,
+    tenantKey: user.data.tenant_key,
+  };
 }
 
 export async function getTenantAccessToken() {
   const { appId, appSecret } = configuration();
   const token = await fetchEnvelope<TenantToken>(`${API}/auth/v3/tenant_access_token/internal`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
   });
-  if (!token.tenant_access_token) throw new Error("飞书未返回通讯录访问凭证。请确认应用已开通通讯录权限。");
+  if (!token.tenant_access_token) throw new FeishuLoginError("remote");
   return token.tenant_access_token;
 }

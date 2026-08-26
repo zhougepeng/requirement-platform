@@ -409,3 +409,20 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb, .sidebar::-webkit-
 html::-webkit-scrollbar-thumb:hover, body::-webkit-scrollbar-thumb:hover, .sidebar::-webkit-scrollbar-thumb:hover, .assistant-messages::-webkit-scrollbar-thumb:hover, .comment-list::-webkit-scrollbar-thumb:hover, .demo-stage::-webkit-scrollbar-thumb:hover, .split-prd-pane.markdown-preview::-webkit-scrollbar-thumb:hover, .directory-page::-webkit-scrollbar-thumb:hover {
   background: #667085;
 }
+
+/* 飞书登录页独立于工作区布局，避免加载后出现侧栏或空白区域。 */
+.login-page { display:grid; min-height:100dvh; place-items:center; padding:24px; background:#f5f7fa; }
+.login-card { display:grid; width:min(360px,100%); justify-items:center; border:1px solid #eaecf0; border-radius:10px; padding:28px 28px 24px; background:#fff; box-shadow:0 10px 28px rgba(16,24,40,.08); }
+.login-mark { display:grid; width:34px; height:34px; place-items:center; border-radius:8px; color:#fff; background:#3370ff; font-size:19px; }
+.login-card h1 { margin:12px 0 4px; color:#1f2329; font-size:20px; line-height:1.35; }
+.login-card > p { margin:0; color:#8f959e; font-size:13px; }
+.login-qr-shell { position:relative; display:grid; width:280px; height:280px; place-items:center; margin:18px 0 10px; color:#8f959e; font-size:13px; }
+.login-qr-shell > div:first-child { width:280px; height:280px; }
+.login-qr-shell iframe { border:0; }
+.login-qr-overlay { position:absolute; inset:0; display:grid; place-content:center; justify-items:center; gap:12px; background:rgba(255,255,255,.94); color:#1f2329; font-size:13px; }
+.login-qr-overlay.is-error { color:#d92d20; }
+.login-qr-overlay button { height:30px; border:1px solid #3370ff; border-radius:5px; padding:0 11px; color:#fff; background:#3370ff; font-size:12px; }
+.login-status { min-height:20px; text-align:center; color:#3370ff !important; font-size:12px !important; }
+.login-status.is-error { color:#d92d20 !important; }
+.login-fallback { margin-top:8px; color:#3370ff; font-size:12px; text-decoration:none; }
+.login-card small { margin-top:15px; color:#a6aab2; font-size:11px; }

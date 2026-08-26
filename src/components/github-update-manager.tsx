@@ -4,13 +4,11 @@ import { useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
 
 type UpdateStatus = {
-  currentCommit: string;
-  remoteCommit: string;
-  ahead: number;
-  behind: number;
-  dirty: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  installerName: string;
   updateAvailable: boolean;
-  canPull: boolean;
+  canInstall: boolean;
   blockedReason?: string;
 };
 
@@ -40,14 +38,14 @@ export function GithubUpdateManager({ initialOpen = false, hideTrigger = false, 
     try {
       setStatus(await request<UpdateStatus>("/api/v1/admin/update"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法检查 GitHub 更新。");
+      setError(reason instanceof Error ? reason.message : "无法检查安装包更新。");
     } finally {
       setLoading(false);
     }
   }
 
-  async function pull() {
-    if (!status?.canPull || pulling) return;
+  async function install() {
+    if (!status?.canInstall || pulling) return;
     setPulling(true);
     setError("");
     try {
@@ -55,7 +53,7 @@ export function GithubUpdateManager({ initialOpen = false, hideTrigger = false, 
       setStatus(result);
       setComplete(true);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法拉取 GitHub 更新。");
+      setError(reason instanceof Error ? reason.message : "无法启动安装包更新。");
     } finally {
       setPulling(false);
     }
@@ -69,18 +67,17 @@ export function GithubUpdateManager({ initialOpen = false, hideTrigger = false, 
   return <>
     {!hideTrigger ? <button className="model-manager-trigger" onClick={() => { setOpen(true); void check(); }} title="检查更新" aria-label="检查更新"><Icon name="refresh" /></button> : null}
     {open ? <div className="model-manager-layer" role="presentation"><button className="model-manager-backdrop" aria-label="关闭系统更新" onClick={close} /><section className="model-manager-dialog github-update-dialog" role="dialog" aria-modal="true" aria-labelledby="github-update-title">
-      <header><div><h2 id="github-update-title">系统更新</h2><p>检查需求库 GitHub 仓库的 main 分支。</p></div><button className="model-manager-close" onClick={close} aria-label="关闭系统更新"><Icon name="close" /></button></header>
+      <header><div><h2 id="github-update-title">系统更新</h2><p>检查 GitHub Release 中的 Linux 安装包。</p></div><button className="model-manager-close" onClick={close} aria-label="关闭系统更新"><Icon name="close" /></button></header>
       <div className="model-manager-body github-update-body">
-        {loading ? <p className="model-manager-empty">正在检查 GitHub 更新…</p> : null}
+        {loading ? <p className="model-manager-empty">正在检查新安装包…</p> : null}
         {!loading && error ? <p className="model-manager-error">{error}</p> : null}
         {!loading && status ? <div className="github-update-status">
-          <div><span>当前版本</span><code>{status.currentCommit}</code></div><div><span>GitHub 版本</span><code>{status.remoteCommit}</code></div>
-          {complete ? <p className="github-update-success">代码已拉取。请重新构建并重启需求库服务后生效。</p> : status.updateAvailable ? <p className="github-update-available">发现 {status.behind} 个更新提交。</p> : <p className="github-update-current">当前已经是 GitHub 最新版本。</p>}
+          <div><span>当前版本</span><code>{status.currentVersion}</code></div><div><span>最新安装包</span><code>{status.latestVersion}</code></div>
+          {complete ? <p className="github-update-success">更新任务已启动。安装完成后服务会自动重启；页面可能暂时断开，请稍后刷新。</p> : status.updateAvailable ? <p className="github-update-available">发现新版安装包：{status.installerName}。</p> : <p className="github-update-current">当前已经是最新安装包版本。</p>}
           {status.updateAvailable && status.blockedReason ? <p className="model-manager-error">{status.blockedReason}</p> : null}
-          {!status.updateAvailable && status.dirty ? <p className="github-update-note">当前存在本地修改；下次发现更新时，需先提交或处理这些修改后才能拉取。</p> : null}
         </div> : null}
       </div>
-      <footer className="github-update-footer"><button className="model-cancel" onClick={close}>关闭</button><button className="model-cancel" disabled={loading || pulling} onClick={() => void check()}><Icon name="refresh" />重新检查</button>{status?.canPull && !complete ? <button className="model-save" disabled={pulling} onClick={() => void pull()}>{pulling ? "拉取中…" : "拉取更新"}</button> : null}</footer>
+      <footer className="github-update-footer"><button className="model-cancel" onClick={close}>关闭</button><button className="model-cancel" disabled={loading || pulling} onClick={() => void check()}><Icon name="refresh" />重新检查</button>{status?.canInstall && !complete ? <button className="model-save" disabled={pulling} onClick={() => void install()}>{pulling ? "正在启动更新…" : "下载并更新"}</button> : null}</footer>
     </section></div> : null}
   </>;
 }

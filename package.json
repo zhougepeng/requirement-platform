@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "start:local": "next start --hostname 127.0.0.1",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:auth": "node scripts/verify-feishu-login.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
