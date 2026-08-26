@@ -13,15 +13,43 @@ permissions:
   contents: read
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Build standalone release
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+          mkdir -p release/.next
+          cp -a .next/standalone release/
+          cp -a .next/static release/.next/static
+          if [[ -d public ]]; then cp -a public release/public; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: requirement-platform-linux-release
+          path: release
+          if-no-files-found: error
+
   deploy:
+    needs: build
     runs-on: [self-hosted, linux, requirement-platform]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: requirement-platform-linux-release
+          path: release
 
-      - name: Build and restart requirement platform
+      - name: Switch release and restart requirement platform
         shell: bash
         env:
           REQUIREMENT_PLATFORM_DEPLOY_DIR: ${{ vars.REQUIREMENT_PLATFORM_DEPLOY_DIR }}
           REQUIREMENT_PLATFORM_SYSTEMD_SERVICE: ${{ vars.REQUIREMENT_PLATFORM_SYSTEMD_SERVICE }}
         run: |
-          ./deploy/linux/deploy.sh
+          ./deploy/linux/deploy.sh ./release

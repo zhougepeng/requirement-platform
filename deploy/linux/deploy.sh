@@ -1,45 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEPLOY_ROOT="${REQUIREMENT_PLATFORM_DEPLOY_DIR:-}"
+PLATFORM_ROOT="${REQUIREMENT_PLATFORM_DEPLOY_DIR:-}"
 SERVICE_NAME="${REQUIREMENT_PLATFORM_SYSTEMD_SERVICE:-requirement-platform}"
 PORT="${REQUIREMENT_PLATFORM_PORT:-3000}"
-EXPECTED_HTTPS_REMOTE="https://github.com/zhougepeng/requirement-platform.git"
-EXPECTED_SSH_REMOTE="git@github.com:zhougepeng/requirement-platform.git"
+ARTIFACT_ROOT="${1:-}"
 
-if [[ -z "$DEPLOY_ROOT" ]]; then
-  echo "REQUIREMENT_PLATFORM_DEPLOY_DIR is required." >&2
+if [[ -z "$PLATFORM_ROOT" || -z "$ARTIFACT_ROOT" ]]; then
+  echo "Usage: REQUIREMENT_PLATFORM_DEPLOY_DIR=/opt/requirement-platform $0 <release-directory>" >&2
   exit 1
 fi
-if [[ ! -d "$DEPLOY_ROOT/.git" ]]; then
-  echo "Deployment directory is not a Git repository: $DEPLOY_ROOT" >&2
+if [[ ! -f "$ARTIFACT_ROOT/.next/standalone/server.js" || ! -d "$ARTIFACT_ROOT/.next/static" ]]; then
+  echo "Release artifact is incomplete: standalone server or static assets are missing." >&2
   exit 1
 fi
-
-branch="$(git -C "$DEPLOY_ROOT" branch --show-current)"
-remote="$(git -C "$DEPLOY_ROOT" remote get-url origin)"
-if [[ "$branch" != "main" ]]; then
-  echo "Deployment directory must be on main, found: $branch" >&2
-  exit 1
-fi
-if [[ "$remote" != "$EXPECTED_HTTPS_REMOTE" && "$remote" != "$EXPECTED_SSH_REMOTE" ]]; then
-  echo "Deployment origin is not the configured requirement-platform repository." >&2
+if [[ ! -d "$PLATFORM_ROOT" ]]; then
+  echo "Platform root does not exist: $PLATFORM_ROOT" >&2
   exit 1
 fi
 
-git -C "$DEPLOY_ROOT" fetch --quiet origin main
-if [[ -n "$(git -C "$DEPLOY_ROOT" status --porcelain)" ]]; then
-  echo "Deployment directory has uncommitted changes; deployment stopped to protect local configuration." >&2
+RELEASES_ROOT="$PLATFORM_ROOT/releases"
+CURRENT_LINK="$PLATFORM_ROOT/current"
+RELEASE_ID="${GITHUB_SHA:-$(date +%Y%m%d%H%M%S)}"
+NEXT_RELEASE="$RELEASES_ROOT/$RELEASE_ID"
+PREVIOUS_RELEASE=""
+if [[ -L "$CURRENT_LINK" ]]; then
+  PREVIOUS_RELEASE="$(readlink -f "$CURRENT_LINK")"
+fi
+
+if [[ -e "$NEXT_RELEASE" ]]; then
+  echo "Release already exists: $NEXT_RELEASE" >&2
   exit 1
 fi
-git -C "$DEPLOY_ROOT" pull --ff-only origin main
+mkdir -p "$RELEASES_ROOT"
+mkdir "$NEXT_RELEASE"
+cp -a "$ARTIFACT_ROOT/." "$NEXT_RELEASE/"
 
-pushd "$DEPLOY_ROOT" >/dev/null
-npm ci
-npm run build
-popd >/dev/null
+ln -s "$NEXT_RELEASE" "$CURRENT_LINK.next"
+mv -Tf "$CURRENT_LINK.next" "$CURRENT_LINK"
 
-sudo systemctl restart "$SERVICE_NAME"
+if ! sudo systemctl restart "$SERVICE_NAME"; then
+  if [[ -n "$PREVIOUS_RELEASE" ]]; then
+    ln -s "$PREVIOUS_RELEASE" "$CURRENT_LINK.next"
+    mv -Tf "$CURRENT_LINK.next" "$CURRENT_LINK"
+    sudo systemctl restart "$SERVICE_NAME" || true
+  fi
+  echo "New release failed to start; previous release was restored when available." >&2
+  exit 1
+fi
+
 for _ in {1..10}; do
   if curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/" >/dev/null; then
     echo "Requirement platform deployed and healthy on port ${PORT}."
@@ -48,5 +57,10 @@ for _ in {1..10}; do
   sleep 1
 done
 
-echo "The service restarted but did not pass the local HTTP health check." >&2
+if [[ -n "$PREVIOUS_RELEASE" ]]; then
+  ln -s "$PREVIOUS_RELEASE" "$CURRENT_LINK.next"
+  mv -Tf "$CURRENT_LINK.next" "$CURRENT_LINK"
+  sudo systemctl restart "$SERVICE_NAME" || true
+fi
+echo "New release did not pass the HTTP health check; previous release was restored when available." >&2
 exit 1

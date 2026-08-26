@@ -5,9 +5,11 @@ After=network.target
 [Service]
 Type=simple
 User=requirement-platform
-WorkingDirectory=__APP_ROOT__
+WorkingDirectory=__PLATFORM_ROOT__/current
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/env npm run start -- --hostname 127.0.0.1 --port 3000
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=__PLATFORM_ROOT__/.env.local
+ExecStart=/usr/bin/env node __PLATFORM_ROOT__/current/.next/standalone/server.js
 Restart=always
 RestartSec=3
 NoNewPrivileges=true

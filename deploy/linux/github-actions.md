@@ -7,16 +7,15 @@
 以下示例以 Ubuntu/Debian、部署目录 `/opt/requirement-platform/app` 为例。Node.js 请使用系统级安装的 Node.js 22 LTS，不要使用仅当前用户可见的 nvm。
 
 1. 安装 Git、Node.js 22 LTS、curl 和反向代理软件（推荐 Caddy）。
-2. 创建专用部署账号、数据目录和代码目录：
+2. 创建专用部署账号、数据目录和发布目录：
 
    ```bash
    sudo useradd --system --create-home --home-dir /opt/requirement-platform --shell /usr/sbin/nologin requirement-platform
    sudo mkdir -p /opt/requirement-platform/data
    sudo chown -R requirement-platform:requirement-platform /opt/requirement-platform
-   sudo -u requirement-platform git clone https://github.com/zhougepeng/requirement-platform.git /opt/requirement-platform/app
    ```
 
-3. 创建 `/opt/requirement-platform/app/.env.local`，填写飞书、域名和数据目录。该文件不进入 Git：
+3. 创建 `/opt/requirement-platform/.env.local`，填写飞书、域名和数据目录。该文件不进入 Git：
 
    ```dotenv
    AUTH_MODE=feishu
@@ -29,22 +28,23 @@
 4. 安装 systemd 服务：
 
    ```bash
-   sudo sed 's|__APP_ROOT__|/opt/requirement-platform/app|g' /opt/requirement-platform/app/deploy/linux/requirement-platform.service.template | sudo tee /etc/systemd/system/requirement-platform.service >/dev/null
+   sudo sed 's|__PLATFORM_ROOT__|/opt/requirement-platform|g' /opt/requirement-platform/deploy/linux/requirement-platform.service.template | sudo tee /etc/systemd/system/requirement-platform.service >/dev/null
    sudo systemctl daemon-reload
-   sudo systemctl enable --now requirement-platform
+   sudo systemctl enable requirement-platform
    ```
 
 5. 在 GitHub 仓库 **Settings → Actions → Runners → New self-hosted runner** 选择 Linux，按页面命令安装 Runner。Runner 使用 `requirement-platform` 账号运行，并添加标签 `requirement-platform`。
 6. 仅授予该账号重启本服务的权限。在 `sudo visudo` 中加入：
 
    ```text
-   requirement-platform ALL=(root) NOPASSWD: /bin/systemctl restart requirement-platform
+   # 先运行 command -v systemctl，并把输出的真实路径填入下面一行。
+   requirement-platform ALL=(root) NOPASSWD: /usr/bin/systemctl restart requirement-platform
    ```
 
 7. 在 GitHub 仓库 **Settings → Secrets and variables → Actions → Variables** 设置：
 
    ```text
-   REQUIREMENT_PLATFORM_DEPLOY_DIR = /opt/requirement-platform/app
+   REQUIREMENT_PLATFORM_DEPLOY_DIR = /opt/requirement-platform
    REQUIREMENT_PLATFORM_SYSTEMD_SERVICE = requirement-platform
    ```
 
@@ -52,6 +52,6 @@
 
 ## 日常发布
 
-每次推送 `main` 后，GitHub Actions 会检查目录干净状态，快进拉取、`npm ci`、构建、重启 systemd 服务并访问本机健康检查地址。
+每次推送 `main` 后，GitHub 托管 Runner 会完成 `npm ci` 与构建；服务器 Runner 只下载 `.next/standalone`、`.next/static` 和 `public` 产物，切换到新版本后重启 systemd 并检查本机地址。服务器不再执行 `npm run build`。
 
-构建失败时不会重启旧服务。部署目录出现未提交修改时也会停止，避免覆盖服务器配置。
+构建失败时不会触发服务器部署。新版本启动或健康检查失败时，脚本会恢复到上一个可用版本。
