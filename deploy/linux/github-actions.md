@@ -55,3 +55,5 @@
 每次推送 `main` 后，GitHub 托管 Runner 会完成 `npm ci` 与构建；服务器 Runner 只下载 `.next/standalone`、`.next/static` 和 `public` 产物，切换到新版本后重启 systemd 并检查本机地址。服务器不再执行 `npm run build`。
 
 构建失败时不会触发服务器部署。新版本启动或健康检查失败时，脚本会恢复到上一个可用版本。
+
+如不想安装自托管 Runner，也可使用 [Linux x64 一键安装包](installer.md)。

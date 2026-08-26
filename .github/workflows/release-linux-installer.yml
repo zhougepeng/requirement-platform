@@ -1,0 +1,63 @@
+name: Build Linux installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Validate release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9][0-9A-Za-z._-]{0,63}$ ]] || { echo "Invalid release tag: $RELEASE_TAG" >&2; exit 1; }
+      - name: Build standalone package
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          npm ci
+          npm run build
+          mkdir -p bundle/payload/.next
+          cp -a .next/standalone bundle/payload/.next/
+          cp -a .next/static bundle/payload/.next/static
+          if [[ -d public ]]; then cp -a public bundle/payload/public; fi
+          cp deploy/linux/requirement-platform.service.template bundle/payload/
+          cp deploy/linux/server.env.example bundle/payload/
+          printf '%s\n' "$RELEASE_TAG" > bundle/payload/VERSION
+          tar -C bundle -czf bundle/payload.tar.gz payload
+          cat deploy/linux/installer-header.sh > bundle/requirement-platform-linux-x64.run
+          printf '\n__RP_PAYLOAD_BELOW__\n' >> bundle/requirement-platform-linux-x64.run
+          cat bundle/payload.tar.gz >> bundle/requirement-platform-linux-x64.run
+          chmod +x bundle/requirement-platform-linux-x64.run
+      - uses: actions/upload-artifact@v4
+        with:
+          name: requirement-platform-linux-x64-installer
+          path: bundle/requirement-platform-linux-x64.run
+          if-no-files-found: error
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" bundle/requirement-platform-linux-x64.run --clobber
+          else
+            gh release create "$RELEASE_TAG" bundle/requirement-platform-linux-x64.run --target "$GITHUB_SHA" --title "Requirement Platform $RELEASE_TAG" --generate-notes
+          fi
