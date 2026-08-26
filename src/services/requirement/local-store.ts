@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, cp, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
@@ -16,7 +16,6 @@ const ARTIFACT_DIR = path.join(DATA_DIR, "artifacts");
 const PUBLISHED_DEMO_DIR = process.env.REQUIREMENT_PLATFORM_PUBLISHED_DEMO_DIR
   ? path.resolve(process.env.REQUIREMENT_PLATFORM_PUBLISHED_DEMO_DIR)
   : path.join(DATA_DIR, "published-demos");
-const SEED_DEMO = path.join(ROOT, "public", "demos", "erp-image-to-purchase.html");
 const MAX_ARTIFACT_BYTES = 15 * 1024 * 1024;
 const MAX_UNPACKED_BYTES = 30 * 1024 * 1024;
 const MAX_ARTIFACT_FILES = 150;
@@ -79,16 +78,6 @@ async function writeStore(store: RequirementStore) {
   await rename(temp, STORE_FILE);
 }
 
-async function copySeedArtifactIfMissing() {
-  const target = path.join(ARTIFACT_DIR, "artifact_erp_image_to_purchase", "index.html");
-  try {
-    await stat(target);
-  } catch {
-    await mkdir(path.dirname(target), { recursive: true });
-    await copyFile(SEED_DEMO, target);
-  }
-}
-
 async function publishArtifactFiles(artifact: DemoArtifact, projectCode: string, requirementCode: string, versionNo: number) {
   safeSegment(projectCode, "项目编码");
   safeSegment(requirementCode, "需求编码");
@@ -101,57 +90,72 @@ async function publishArtifactFiles(artifact: DemoArtifact, projectCode: string,
   return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/${artifact.entryFile}`;
 }
 
+function isLegacyDemoStore(store: RequirementStore) {
+  const [project] = store.projects;
+  const [requirement] = store.requirements;
+  return store.projects.length === 1
+    && project?.id === "erp"
+    && project.name === "ERP"
+    && project.requirements.length === 3
+    && store.requirements.length === 1
+    && requirement?.code === "ERP-001"
+    && requirement.title === "图片转采购单"
+    && store.versions.length === 3
+    && store.versions.every((version) => version.requirementCode === "ERP-001")
+    && store.comments.length === 3
+    && store.comments.every((comment) => comment.requirementCode === "ERP-001")
+    && store.artifacts.length === 1
+    && store.artifacts[0]?.id === "artifact_erp_image_to_purchase";
+}
+
 async function ensureStore(): Promise<RequirementStore> {
+  let store: RequirementStore;
   try {
-    const store = JSON.parse(await readFile(STORE_FILE, "utf8")) as RequirementStore;
-    let migrated = false;
-    for (const version of store.versions) {
-      if (!version.demoEntryUrl.startsWith("/demos/published/")) continue;
-      const artifact = store.artifacts.find((item) => item.id === version.artifactId);
-      if (!artifact) throw new Error("Demo 工件数据不完整。");
-      version.demoEntryUrl = await publishArtifactFiles(artifact, "erp", version.requirementCode, version.number);
-      migrated = true;
-    }
-    for (const project of store.projects) {
-      const requirements = store.requirements.filter((item) => item.projectId === project.id);
-      const orderedRequirements = requirements.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-      const newest = orderedRequirements[0];
-      const earliest = requirements.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
-      if (!project.createdAt && earliest) {
-        project.createdAt = earliest.createdAt.slice(0, 10);
-        migrated = true;
-      }
-      if (!project.owner && newest) {
-        project.owner = newest.owner ?? store.versions.find((item) => item.id === newest.currentVersionId)?.publisher;
-        migrated = true;
-      }
-      for (const summary of project.requirements) {
-        const requirement = store.requirements.find((item) => item.code === summary.code);
-        if (!requirement) continue;
-        const currentVersion = store.versions.find((item) => item.id === requirement.currentVersionId);
-        const previous = JSON.stringify(summary);
-        summary.createdAt ??= requirement.createdAt;
-        summary.updatedAt ??= requirement.updatedAt;
-        summary.owner ??= requirement.owner ?? currentVersion?.publisher;
-        if (JSON.stringify(summary) !== previous) migrated = true;
-      }
-    }
-    if (migrated) await writeStore(store);
-    return store;
+    store = JSON.parse(await readFile(STORE_FILE, "utf8")) as RequirementStore;
   } catch {
-    await copySeedArtifactIfMissing();
-    const store = createInitialStore();
-    for (const version of store.versions) {
-      version.demoEntryUrl = await publishArtifactFiles(
-        store.artifacts[0],
-        "erp",
-        version.requirementCode,
-        version.number,
-      );
-    }
+    store = createInitialStore();
     await writeStore(store);
     return store;
   }
+  if (isLegacyDemoStore(store)) {
+    const emptyStore = createInitialStore();
+    await writeStore(emptyStore);
+    return emptyStore;
+  }
+  let migrated = false;
+  for (const version of store.versions) {
+    if (!version.demoEntryUrl.startsWith("/demos/published/")) continue;
+    const artifact = store.artifacts.find((item) => item.id === version.artifactId);
+    if (!artifact) throw new Error("Demo 工件数据不完整。");
+    version.demoEntryUrl = await publishArtifactFiles(artifact, "erp", version.requirementCode, version.number);
+    migrated = true;
+  }
+  for (const project of store.projects) {
+    const requirements = store.requirements.filter((item) => item.projectId === project.id);
+    const orderedRequirements = requirements.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const newest = orderedRequirements[0];
+    const earliest = requirements.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+    if (!project.createdAt && earliest) {
+      project.createdAt = earliest.createdAt.slice(0, 10);
+      migrated = true;
+    }
+    if (!project.owner && newest) {
+      project.owner = newest.owner ?? store.versions.find((item) => item.id === newest.currentVersionId)?.publisher;
+      migrated = true;
+    }
+    for (const summary of project.requirements) {
+      const requirement = store.requirements.find((item) => item.code === summary.code);
+      if (!requirement) continue;
+      const currentVersion = store.versions.find((item) => item.id === requirement.currentVersionId);
+      const previous = JSON.stringify(summary);
+      summary.createdAt ??= requirement.createdAt;
+      summary.updatedAt ??= requirement.updatedAt;
+      summary.owner ??= requirement.owner ?? currentVersion?.publisher;
+      if (JSON.stringify(summary) !== previous) migrated = true;
+    }
+  }
+  if (migrated) await writeStore(store);
+  return store;
 }
 
 async function mutate<T>(operation: (store: RequirementStore) => Promise<T> | T): Promise<T> {

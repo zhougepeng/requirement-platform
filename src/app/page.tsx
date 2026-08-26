@@ -1,5 +1,5 @@
 import { RequirementWorkspace } from "@/components/requirement-workspace";
 
 export default function Home() {
-  return <RequirementWorkspace initialRequirementCode="ERP-001" />;
+  return <RequirementWorkspace />;
 }

@@ -253,6 +253,8 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 .requirement-list button { display:grid; width:100%; align-items:center; gap:0; border:0; border-bottom:1px solid #edf0f3; padding:11px 8px; color:#334155; background:transparent; text-align:left; }
 .requirement-list button:hover { background:#f8fafc; }
 .requirement-list button > span:last-child { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-left:10px; color:#475467; font-size:12px; font-weight:560; }
+.directory-empty { display:flex; min-height:180px; align-items:center; justify-content:center; gap:12px; color:#98a2b3; font-size:13px; }
+.directory-empty b { color:#667085; font-weight:500; }
 .assistant-trigger-knowledge { position:fixed; right:24px; bottom:22px; left:auto; top:auto; width:42px; height:42px; border-radius:10px; color:#175cd3; background:#eaf2ff; box-shadow:0 8px 22px rgba(16,24,40,.15); transform:none; }
 .assistant-trigger-knowledge:hover { color:#0f5cc0; background:#dbeafe; }
 .assistant-sources { display:grid; gap:6px; margin-top:9px; }
