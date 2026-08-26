@@ -68,7 +68,7 @@ sed "s|__PLATFORM_ROOT__|$PLATFORM_ROOT|g" "$release_dir/requirement-platform.se
 systemctl daemon-reload
 ln -s "$release_dir" "$current_link.next"
 mv -Tf "$current_link.next" "$current_link"
-if ! systemctl enable --now "$SERVICE_NAME"; then
+if ! systemctl enable "$SERVICE_NAME" || ! systemctl restart "$SERVICE_NAME"; then
   if [[ -n "$previous_release" ]]; then
     ln -s "$previous_release" "$current_link.next"
     mv -Tf "$current_link.next" "$current_link"
