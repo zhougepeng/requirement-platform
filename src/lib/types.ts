@@ -27,6 +27,16 @@ export type RequirementComment = {
   content: string;
 };
 
+export type RequirementGap = {
+  id: string;
+  requirementCode: string;
+  question: string;
+  source: "assistant" | "manual";
+  status: "open";
+  createdAt: string;
+  createdBy: string;
+};
+
 export type RequirementSummary = {
   code: string;
   title: string;
@@ -78,6 +88,8 @@ export type RequirementStore = {
   versions: RequirementVersion[];
   comments: RequirementComment[];
   artifacts: DemoArtifact[];
+  /** Optional for backward compatibility with existing local stores. */
+  gaps?: RequirementGap[];
 };
 
 export type RequirementDetail = {

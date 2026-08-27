@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, Project, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementStore, RequirementVersion } from "@/lib/types";
+import type { DemoArtifact, Project, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementGap, RequirementStore, RequirementVersion } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -233,6 +233,10 @@ async function ensureStore(): Promise<RequirementStore> {
       if (JSON.stringify(summary) !== previous) migrated = true;
     }
   }
+  if (!Array.isArray(store.gaps)) {
+    store.gaps = [];
+    migrated = true;
+  }
   if (migrated) await writeStore(store);
   return store;
 }
@@ -450,12 +454,33 @@ export async function searchRequirements(query: string) {
 }
 
 export type RequirementKnowledgeMatch = {
+  id: string;
   requirementCode: string;
   title: string;
   versionNo: number;
+  projectId: string;
   projectName: string;
+  section: string;
   excerpt: string;
+  demoEntryUrl: string;
+  isHistorical: boolean;
   matchedTerms: string[];
+};
+
+export type RequirementKnowledgeScope = "current-requirement" | "current-project" | "all-published";
+export type ScopedRequirementKnowledgeInput = {
+  query: string;
+  scope: RequirementKnowledgeScope;
+  requirementCode?: string;
+  projectId?: string;
+  versionNo?: number;
+  includeHistory?: boolean;
+  limit?: number;
+};
+export type ScopedRequirementKnowledgeResult = {
+  matches: RequirementKnowledgeMatch[];
+  projectContext?: string;
+  relatedRequirements: Array<{ code: string; title: string }>;
 };
 
 function relevantExcerpt(text: string, query: string, limit = 900) {
@@ -468,6 +493,38 @@ function relevantExcerpt(text: string, query: string, limit = 900) {
   return `${start ? "..." : ""}${text.slice(start, end)}${end < text.length ? "..." : ""}`;
 }
 
+function prdSections(prd: string) {
+  const lines = prd.replace(/\r\n/g, "\n").split("\n");
+  const sections: Array<{ title: string; text: string }> = [];
+  let title = "PRD 正文";
+  let buffer: string[] = [];
+  const flush = () => {
+    const text = buffer.join("\n").trim();
+    if (text) sections.push({ title, text });
+    buffer = [];
+  };
+  for (const line of lines) {
+    const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (heading) {
+      flush();
+      title = heading[2].trim();
+      buffer.push(line);
+    } else {
+      buffer.push(line);
+    }
+  }
+  flush();
+  if (!sections.length && prd.trim()) sections.push({ title: "PRD 正文", text: prd.trim() });
+  return sections.flatMap((section) => {
+    if (section.text.length <= 1400) return [section];
+    const chunks: Array<{ title: string; text: string }> = [];
+    for (let start = 0; start < section.text.length; start += 1200) {
+      chunks.push({ title: section.title, text: section.text.slice(start, start + 1400) });
+    }
+    return chunks;
+  });
+}
+
 function queryTerms(value: string) {
   const rawTerms = value.match(/[\u4e00-\u9fff]{2,}|[a-z0-9_-]+/gi) ?? [value];
   return Array.from(new Set(rawTerms.flatMap((term) => {
@@ -477,46 +534,92 @@ function queryTerms(value: string) {
 }
 
 /** Small-team baseline retrieval: current published PRD text only, ranked before it reaches a model. */
-export async function findRequirementKnowledge(query: string, limit = 4): Promise<RequirementKnowledgeMatch[]> {
-  const value = query.trim();
-  if (!value) return [];
-  const terms = queryTerms(value);
-  const broadQuestion = /需求库|有哪些|全部|概述|介绍|列表|项目/.test(value);
+function isHistoryQuestion(question: string) {
+  return /历史|以前|之前|旧版|老版本|v\s*\d+|版本.*区别|什么时候.*(?:加|改)|最近.*(?:修改|变更)/i.test(question);
+}
+
+function projectContext(store: RequirementStore, project: Project) {
+  const requirements = store.requirements
+    .filter((item) => item.projectId === project.id && !archived(item))
+    .map((item) => {
+      const version = store.versions.find((candidate) => candidate.id === item.currentVersionId);
+      const sections = version ? prdSections(version.prd).slice(0, 4).map((section) => section.title).join("、") : "";
+      return `- ${item.code}《${item.title}》${sections ? `：${sections}` : ""}`;
+    });
+  return [
+    `项目名称：${project.name}`,
+    `项目简介：${project.description || "当前项目未填写简介。"}`,
+    "重要已发布需求：",
+    requirements.length ? requirements.join("\n") : "（当前项目暂无已发布需求）",
+    "说明：这份项目上下文仅用于理解问题和检索路由，具体业务规则必须以引用的 PRD 片段为准。",
+  ].join("\n");
+}
+
+/**
+ * Small-team RAG baseline: the program filters scope and archived data before any model call.
+ * Every stored version is a published snapshot; history is only included for explicit version questions.
+ */
+export async function findScopedRequirementKnowledge(input: ScopedRequirementKnowledgeInput): Promise<ScopedRequirementKnowledgeResult> {
+  const query = input.query.trim();
+  if (!query) return { matches: [], relatedRequirements: [] };
+  const terms = queryTerms(query);
+  const broadQuestion = /需求库|有哪些|全部|概述|介绍|列表|项目|流程|异常|最近/.test(query);
+  const includeHistory = input.includeHistory ?? isHistoryQuestion(query);
   const store = await ensureStore();
+  const scopedRequirement = input.requirementCode ? store.requirements.find((item) => item.code === input.requirementCode) : undefined;
+  const scopedProjectId = input.scope === "current-requirement"
+    ? scopedRequirement?.projectId
+    : input.scope === "current-project" ? input.projectId : undefined;
+  if (input.scope === "current-requirement" && !scopedRequirement) throw new Error("当前需求不存在。");
+  if (input.scope === "current-project" && !scopedProjectId) throw new Error("当前项目不存在。");
+
   const ranked = store.requirements.flatMap((requirement) => {
-    const version = store.versions.find((item) => item.id === requirement.currentVersionId);
     const project = store.projects.find((item) => item.id === requirement.projectId);
-    if (!version || !project || archived(requirement) || archived(project)) return [];
-    const code = requirement.code.toLowerCase();
-    const title = requirement.title.toLowerCase();
-    const projectName = project.name.toLowerCase();
-    const summary = version.changeSummary.toLowerCase();
-    const prd = version.prd.toLowerCase();
-    const hits = terms.filter((term) => [code, title, projectName, summary, prd].some((field) => field.includes(term)));
-    const exactCode = value.toLowerCase().includes(code);
-    const titleHits = terms.filter((term) => title.includes(term)).length;
-    const score = (exactCode ? 100 : 0) + titleHits * 8 + terms.filter((term) => code.includes(term)).length * 6
-      + terms.filter((term) => summary.includes(term)).length * 3 + terms.filter((term) => prd.includes(term)).length;
-    if (!hits.length && !broadQuestion) return [];
-    if (!broadQuestion && score < 2) return [];
-    return [{
-      requirementCode: requirement.code,
-      title: requirement.title,
-      versionNo: version.number,
-      projectName: project.name,
-      excerpt: relevantExcerpt(version.prd, value),
-      matchedTerms: hits.slice(0, 8),
-      score,
-    }];
+    if (!project || archived(project) || archived(requirement)) return [];
+    if (input.scope === "current-requirement" && requirement.code !== input.requirementCode) return [];
+    if (input.scope === "current-project" && requirement.projectId !== scopedProjectId) return [];
+    const versions = input.scope === "current-requirement" && input.versionNo
+      ? store.versions.filter((version) => version.requirementCode === requirement.code && version.number === input.versionNo)
+      : includeHistory
+        ? store.versions.filter((version) => version.requirementCode === requirement.code)
+        : store.versions.filter((version) => version.id === requirement.currentVersionId);
+    return versions.flatMap((version) => prdSections(version.prd).flatMap((section, sectionIndex) => {
+      const fields = [requirement.code, requirement.title, project.name, version.changeSummary, section.title, section.text].map((value) => value.toLowerCase());
+      const hits = terms.filter((term) => fields.some((field) => field.includes(term)));
+      const exactCode = query.toLowerCase().includes(requirement.code.toLowerCase());
+      const titleHits = terms.filter((term) => requirement.title.toLowerCase().includes(term)).length;
+      const score = (exactCode ? 100 : 0) + titleHits * 10 + terms.filter((term) => section.title.toLowerCase().includes(term)).length * 7
+        + terms.filter((term) => section.text.toLowerCase().includes(term)).length * 3 + (version.id === requirement.currentVersionId ? 2 : 0);
+      if (!hits.length && !broadQuestion) return [];
+      if (!broadQuestion && score < 3) return [];
+      return [{
+        id: `${requirement.code}:v${version.number}:s${sectionIndex}`,
+        requirementCode: requirement.code,
+        title: requirement.title,
+        versionNo: version.number,
+        projectId: project.id,
+        projectName: project.name,
+        section: section.title,
+        excerpt: relevantExcerpt(section.text, query, 1000),
+        demoEntryUrl: version.demoEntryUrl,
+        isHistorical: version.id !== requirement.currentVersionId,
+        matchedTerms: hits.slice(0, 8),
+        score,
+      }];
+    }));
   }).toSorted((left, right) => right.score - left.score || left.requirementCode.localeCompare(right.requirementCode));
-  return clone(ranked.slice(0, Math.max(1, Math.min(limit, 8))).map((match) => ({
-    requirementCode: match.requirementCode,
-    title: match.title,
-    versionNo: match.versionNo,
-    projectName: match.projectName,
-    excerpt: match.excerpt,
-    matchedTerms: match.matchedTerms,
-  })));
+  const limit = Math.max(1, Math.min(input.limit ?? 6, 8));
+  const matches = ranked.slice(0, limit) as RequirementKnowledgeMatch[];
+  const relatedRequirements = Array.from(new Map(matches
+    .filter((match) => match.requirementCode !== input.requirementCode)
+    .map((match) => [match.requirementCode, { code: match.requirementCode, title: match.title }])).values()).slice(0, 5);
+  const contextProject = scopedProjectId ? store.projects.find((project) => project.id === scopedProjectId) : undefined;
+  return clone({ matches, relatedRequirements, projectContext: contextProject ? projectContext(store, contextProject) : undefined });
+}
+
+/** Backward-compatible global current-version search used by MCP and legacy callers. */
+export async function findRequirementKnowledge(query: string, limit = 4): Promise<RequirementKnowledgeMatch[]> {
+  return (await findScopedRequirementKnowledge({ query, scope: "all-published", limit })).matches;
 }
 
 export async function addComment(requirementCode: string, versionId: string, content: string, actor?: { id: string; name: string }) {
@@ -537,6 +640,25 @@ export async function addComment(requirementCode: string, versionId: string, con
     };
     store.comments.push(comment);
     return clone(comment);
+  });
+}
+
+export async function listRequirementGaps(requirementCode: string) {
+  const store = await ensureStore();
+  return clone((store.gaps ?? []).filter((gap) => gap.requirementCode === requirementCode && gap.status === "open").toSorted((left, right) => right.createdAt.localeCompare(left.createdAt)));
+}
+
+export async function addRequirementGap(requirementCode: string, question: string, actor?: { id: string; name: string }): Promise<RequirementGap> {
+  const value = question.trim();
+  if (!value || value.length > 2000) throw new Error("待补充问题不能为空且不能超过 2000 字。");
+  return mutate((store) => {
+    const requirement = store.requirements.find((item) => item.code === requirementCode);
+    if (!requirement || archived(requirement)) throw new Error("需求不存在或已作废。");
+    const existing = (store.gaps ?? []).find((gap) => gap.requirementCode === requirementCode && gap.status === "open" && gap.question === value);
+    if (existing) return clone(existing);
+    const gap: RequirementGap = { id: `gap_${randomUUID().replaceAll("-", "")}`, requirementCode, question: value, source: "assistant", status: "open", createdAt: now(), createdBy: actor?.name || "本地开发身份" };
+    (store.gaps ??= []).push(gap);
+    return clone(gap);
   });
 }
 
