@@ -4,12 +4,14 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import AdmZip from "adm-zip";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = 3313;
 const baseUrl = `http://127.0.0.1:${port}`;
 const sessionSecret = randomBytes(32).toString("base64url");
 const dataDir = await mkdtemp(path.join(tmpdir(), "requirement-platform-permissions-"));
+const integrationToken = randomBytes(32).toString("base64url");
 
 function expect(condition, message) {
   if (!condition) throw new Error(message);
@@ -23,7 +25,7 @@ function sessionCookie(openId, name) {
 
 async function request(pathname, openId, options = {}) {
   const headers = new Headers(options.headers);
-  headers.set("Cookie", sessionCookie(openId, openId));
+  if (openId) headers.set("Cookie", sessionCookie(openId, openId));
   return fetch(`${baseUrl}${pathname}`, {
     redirect: "manual",
     ...options,
@@ -74,6 +76,7 @@ const server = spawn(process.execPath, ["server.js"], {
     AUTH_COOKIE_SECURE: "false",
     APP_BASE_URL: baseUrl,
     AUTH_SESSION_SECRET: sessionSecret,
+    WORKBENCH_INTEGRATION_TOKEN: integrationToken,
     REQUIREMENT_PLATFORM_DATA_DIR: dataDir,
     REQUIREMENT_PLATFORM_PUBLISHED_DEMO_DIR: path.join(dataDir, "published-demos"),
   },
@@ -101,7 +104,50 @@ try {
   expect((await request("/api/v1/admin/employees", "admin")).status === 200, "管理角色无法读取员工权限。");
   expect((await request("/api/v1/models", "admin")).status === 200, "管理角色无法读取模型管理。");
 
-  console.log("权限回归测试通过：查看可读和使用 AI、发布可创建项目、管理可进入管理员接口，越权请求均被拒绝。");
+  const tokenHeaders = { Authorization: `Bearer ${integrationToken}` };
+  const tokenProjects = await request("/api/v1/projects", undefined, { headers: tokenHeaders });
+  expect(tokenProjects.status === 200, `工作搭子令牌无法读取项目列表（HTTP ${tokenProjects.status}）。`);
+
+  const createdProject = await request("/api/v1/projects", undefined, {
+    method: "POST",
+    headers: { ...tokenHeaders, "content-type": "application/json" },
+    body: JSON.stringify({ code: "WBK", name: "工作搭子联调项目", description: "服务间令牌回归测试" }),
+  });
+  expect(createdProject.status === 201, `工作搭子令牌无法创建项目（HTTP ${createdProject.status}）。`);
+
+  const archive = new AdmZip();
+  archive.addFile("index.html", Buffer.from("<!doctype html><title>workbench integration</title>", "utf8"));
+  const form = new FormData();
+  form.append("file", new Blob([archive.toBuffer()], { type: "application/zip" }), "demo.zip");
+  const uploadedArtifact = await request("/api/v1/artifacts", undefined, {
+    method: "POST",
+    headers: tokenHeaders,
+    body: form,
+  });
+  expect(uploadedArtifact.status === 201, `工作搭子令牌无法上传 Demo 工件（HTTP ${uploadedArtifact.status}）。`);
+  const artifactPayload = await uploadedArtifact.json();
+  const artifactId = artifactPayload.data?.id;
+  expect(typeof artifactId === "string" && artifactId.length > 0, "Demo 工件响应缺少 id。");
+
+  const published = await request("/api/v1/requirements/publish", undefined, {
+    method: "POST",
+    headers: { ...tokenHeaders, "content-type": "application/json" },
+    body: JSON.stringify({
+      project_code: "WBK",
+      title: "工作搭子令牌联调需求",
+      prd_markdown: "# 联调需求\n\n验证工作搭子可以发布 PRD。",
+      artifact_id: artifactId,
+      change_summary: "服务间令牌回归测试。",
+    }),
+  });
+  expect(published.status === 201, `工作搭子令牌无法发布需求（HTTP ${published.status}）。`);
+
+  expect((await request("/api/v1/admin/employees", undefined, { headers: tokenHeaders })).status === 403, "工作搭子令牌错误获得员工管理权限。");
+  expect((await request("/api/v1/models", undefined, { headers: tokenHeaders })).status === 403, "工作搭子令牌错误获得模型管理权限。");
+  const invalidToken = await request("/api/v1/projects", undefined, { headers: { Authorization: "Bearer invalid-workbench-token" } });
+  expect(invalidToken.status === 401 || invalidToken.status === 403, `错误工作搭子令牌未被拒绝（HTTP ${invalidToken.status}）。`);
+
+  console.log("权限回归测试通过：查看可读和使用 AI、发布可创建项目并发布 Demo+PRD、管理可进入管理员接口；服务间令牌越权和错误令牌均被拒绝。");
 } finally {
   await stopServer();
   await rm(dataDir, { recursive: true, force: true });

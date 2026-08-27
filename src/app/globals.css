@@ -229,14 +229,14 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 .sidebar-publish svg { width:16px; height:16px; }
 .directory-table-head { width:100%; }
 .project-table-head,.project-row-open { grid-template-columns:minmax(260px,1.65fr) minmax(110px,.65fr) minmax(110px,.65fr) minmax(92px,.45fr) minmax(120px,.55fr); }
-.requirement-table-head,.requirement-list button { grid-template-columns:minmax(260px,1.7fr) minmax(132px,.7fr) minmax(132px,.7fr) minmax(100px,.55fr) minmax(106px,.5fr); }
+.requirement-table-head,.requirement-list .requirement-row > button:not(.requirement-archive-button) { grid-template-columns:minmax(260px,1.7fr) minmax(132px,.7fr) minmax(132px,.7fr) minmax(100px,.55fr) minmax(106px,.5fr); }
 .directory-table-head { height:34px; border-top:1px solid #eef0f3; border-bottom:1px solid #e4e7ec; color:#98a2b3; font-size:11px; }
 .directory-table-head span:not(:first-child) { padding-left:10px; }
 .project-row { position:relative; display:block; border-bottom:1px solid #edf0f3; padding:0; }
 .project-row:hover { background:#f8fafc; }
 .project-row-open { display:grid; width:100%; align-items:center; gap:0; border:0; padding:11px 42px 11px 8px; color:#344054; background:transparent; text-align:left; }
-.project-row-open > span:first-child,.requirement-list button > span:first-child { display:grid; gap:3px; min-width:0; }
-.project-row-open small,.requirement-list button > small { overflow:hidden; padding-left:10px; color:#667085; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.project-row-open > span:first-child,.requirement-list .requirement-row > button:not(.requirement-archive-button) > span:first-child { display:grid; gap:3px; min-width:0; }
+.project-row-open small,.requirement-list .requirement-row > button:not(.requirement-archive-button) > small { overflow:hidden; padding-left:10px; color:#667085; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .project-row-open .project-row-meta { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; padding-left:10px; text-align:left; }
 .project-row-open .project-row-meta small { padding-left:0; }
 .project-row-open .project-row-meta svg { flex:0 0 auto; }
@@ -271,9 +271,9 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 .sidebar-action-popover { width:228px; }
 .profile-toggle { justify-content:space-between; gap:10px; white-space:normal; }
 .profile-toggle svg { flex:0 0 auto; width:15px; height:15px; color:#175cd3; }
-.requirement-list button { display:grid; width:100%; align-items:center; gap:0; border:0; border-bottom:1px solid #edf0f3; padding:11px 8px; color:#334155; background:transparent; text-align:left; }
-.requirement-list button:hover { background:#f8fafc; }
-.requirement-list button > span:last-child { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-left:10px; color:#475467; font-size:12px; font-weight:560; }
+.requirement-list .requirement-row > button:not(.requirement-archive-button) { display:grid; width:100%; align-items:center; gap:0; border:0; border-bottom:1px solid #edf0f3; padding:11px 8px; color:#334155; background:transparent; text-align:left; }
+.requirement-list .requirement-row > button:not(.requirement-archive-button):hover { background:#f8fafc; }
+.requirement-list .requirement-row > button:not(.requirement-archive-button) > span:last-child { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-left:10px; color:#475467; font-size:12px; font-weight:560; }
 .directory-empty { display:flex; min-height:180px; align-items:center; justify-content:center; gap:12px; color:#98a2b3; font-size:13px; }
 .directory-empty b { color:#667085; font-weight:500; }
 .assistant-trigger-knowledge { position:fixed; right:24px; bottom:22px; left:auto; top:auto; width:42px; height:42px; border-radius:10px; color:#175cd3; background:#eaf2ff; box-shadow:0 8px 22px rgba(16,24,40,.15); transform:none; }
@@ -430,6 +430,26 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb, .sidebar::-webkit-
 html::-webkit-scrollbar-thumb:hover, body::-webkit-scrollbar-thumb:hover, .sidebar::-webkit-scrollbar-thumb:hover, .assistant-messages::-webkit-scrollbar-thumb:hover, .comment-list::-webkit-scrollbar-thumb:hover, .demo-stage::-webkit-scrollbar-thumb:hover, .split-prd-pane.markdown-preview::-webkit-scrollbar-thumb:hover, .directory-page::-webkit-scrollbar-thumb:hover {
   background: #667085;
 }
+
+/* 需求行的作废按钮不能继承整行按钮的网格尺寸。 */
+.requirement-list .requirement-row > .requirement-archive-button {
+  display: grid;
+  width: 28px;
+  grid-template-columns: none;
+  gap: 0;
+  border-bottom: 0;
+  padding: 0;
+  text-align: center;
+}
+.requirement-list .requirement-row > .requirement-archive-button:hover {
+  background: #fef3f2;
+}
+.requirement-list .requirement-row > .requirement-archive-button.is-restore:hover {
+  background: #ecfdf3;
+}
+
+/* sticky 侧栏会形成独立层级；提升它，确保从底部菜单打开的管理弹窗覆盖主列表。 */
+.sidebar { z-index: 80; }
 
 /* 飞书登录页独立于工作区布局，避免加载后出现侧栏或空白区域。 */
 .login-page { display:grid; min-height:100dvh; place-items:center; padding:24px; background:#f5f7fa; }
