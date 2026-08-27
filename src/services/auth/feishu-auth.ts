@@ -1,13 +1,16 @@
 import "server-only";
 
 type FeishuEnvelope<T> = { code?: number; msg?: string; data?: T } & T;
-type FeishuToken = { app_access_token?: string };
+type FeishuToken = { app_access_token?: string; expire?: number };
 type TenantToken = { tenant_access_token?: string };
 type LoginToken = { access_token?: string };
 type FeishuUser = { open_id?: string; union_id?: string; user_id?: string; name?: string; avatar_url?: string; tenant_key?: string };
 
 const API = "https://open.feishu.cn/open-apis";
 const QR_AUTHORIZE = "https://passport.feishu.cn/suite/passport/oauth/authorize";
+const APP_TOKEN_REFRESH_MARGIN_MS = 60_000;
+
+let appAccessTokenCache: { token: string; expiresAt: number } | undefined;
 
 export class FeishuLoginError extends Error {
   constructor(public readonly kind: "configuration" | "unauthorized_tenant" | "remote") {
@@ -48,16 +51,39 @@ export function isFeishuTenantDiscoveryEnabled() {
   return process.env.FEISHU_TENANT_DISCOVERY?.trim().toLowerCase() === "true";
 }
 
-async function fetchEnvelope<T>(url: string, init: RequestInit) {
+async function fetchEnvelope<T>(label: string, url: string, init: RequestInit) {
+  const startedAt = Date.now();
   let response: Response;
   try {
     response = await fetch(url, { ...init, cache: "no-store", signal: AbortSignal.timeout(15_000) });
   } catch {
+    console.warn(`[feishu-auth] ${label} request failed after ${Date.now() - startedAt}ms`);
     throw new FeishuLoginError("remote");
   }
   const payload = await response.json().catch(() => ({})) as FeishuEnvelope<T>;
-  if (!response.ok || payload.code !== 0) throw new FeishuLoginError("remote");
+  if (!response.ok || payload.code !== 0) {
+    console.warn(`[feishu-auth] ${label} rejected after ${Date.now() - startedAt}ms (HTTP ${response.status}, code ${payload.code ?? "unknown"})`);
+    throw new FeishuLoginError("remote");
+  }
+  console.info(`[feishu-auth] ${label} completed in ${Date.now() - startedAt}ms`);
   return payload;
+}
+
+async function getAppAccessToken(appId: string, appSecret: string) {
+  const now = Date.now();
+  if (appAccessTokenCache && appAccessTokenCache.expiresAt - APP_TOKEN_REFRESH_MARGIN_MS > now) {
+    console.info("[feishu-auth] app access token cache hit");
+    return appAccessTokenCache.token;
+  }
+  const appToken = await fetchEnvelope<FeishuToken>("app access token", `${API}/auth/v3/app_access_token/internal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+  });
+  if (!appToken.app_access_token) throw new FeishuLoginError("remote");
+  const expiresInMs = Math.max(60, appToken.expire ?? 7_200) * 1000;
+  appAccessTokenCache = { token: appToken.app_access_token, expiresAt: now + expiresInMs };
+  return appAccessTokenCache.token;
 }
 
 /**
@@ -84,23 +110,20 @@ export function getFeishuLoginUrl(state: string) {
 }
 
 export async function getFeishuUserIdentity(code: string) {
+  const startedAt = Date.now();
   const { appId, appSecret } = configuration({ requireTenantKey: false });
-  const appToken = await fetchEnvelope<FeishuToken>(`${API}/auth/v3/app_access_token/internal`, {
+  const appAccessToken = await getAppAccessToken(appId, appSecret);
+  const loginToken = await fetchEnvelope<LoginToken>("login access token", `${API}/authen/v1/access_token`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-  });
-  if (!appToken.app_access_token) throw new FeishuLoginError("remote");
-  const loginToken = await fetchEnvelope<LoginToken>(`${API}/authen/v1/access_token`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${appToken.app_access_token}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${appAccessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ grant_type: "authorization_code", code }),
   });
   if (!loginToken.data?.access_token) throw new FeishuLoginError("remote");
-  const user = await fetchEnvelope<FeishuUser>(`${API}/authen/v1/user_info`, {
+  const user = await fetchEnvelope<FeishuUser>("user info", `${API}/authen/v1/user_info`, {
     headers: { Authorization: `Bearer ${loginToken.data.access_token}` },
   });
   if (!user.data?.open_id || !user.data.name || !user.data.tenant_key) throw new FeishuLoginError("remote");
+  console.info(`[feishu-auth] user identity completed in ${Date.now() - startedAt}ms`);
   return {
     openId: user.data.open_id,
     unionId: user.data.union_id,
@@ -120,7 +143,7 @@ export async function exchangeCode(code: string) {
 
 export async function getTenantAccessToken() {
   const { appId, appSecret } = configuration({ requireTenantKey: false });
-  const token = await fetchEnvelope<TenantToken>(`${API}/auth/v3/tenant_access_token/internal`, {
+  const token = await fetchEnvelope<TenantToken>("tenant access token", `${API}/auth/v3/tenant_access_token/internal`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
