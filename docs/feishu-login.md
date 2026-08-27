@@ -27,6 +27,8 @@ FEISHU_ALLOWED_TENANT_KEY=你的企业tenant_key
 
 `FEISHU_ALLOWED_TENANT_KEY` 是唯一允许登录的企业标识，不能为空。可从已确认属于本企业的飞书用户信息或飞书开放平台的企业信息中获得；不要填公司名称、App ID 或 open_id。
 
+不知道 tenant_key 时，可临时在服务器设置 `FEISHU_TENANT_DISCOVERY=true` 并重启服务。此模式下使用公司飞书扫码确认后，平台只显示当前账号的 `tenant_key`，不会创建登录 Session。复制该值填入 `FEISHU_ALLOWED_TENANT_KEY` 后，删除 `FEISHU_TENANT_DISCOVERY=true` 并再次重启服务。
+
 旧配置 `FEISHU_ALLOWED_TENANT_KEYS` 仅保留兼容读取，生产环境请改用单个的 `FEISHU_ALLOWED_TENANT_KEY`。
 
 ## 3. 本地调试

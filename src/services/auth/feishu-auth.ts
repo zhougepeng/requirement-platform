@@ -15,7 +15,7 @@ export class FeishuLoginError extends Error {
   }
 }
 
-function configuration() {
+function configuration(options: { requireTenantKey?: boolean } = {}) {
   const appId = process.env.FEISHU_APP_ID?.trim();
   const appSecret = process.env.FEISHU_APP_SECRET?.trim();
   const configuredRedirect = process.env.FEISHU_REDIRECT_URI?.trim();
@@ -23,7 +23,7 @@ function configuration() {
   const redirectUri = configuredRedirect || (baseUrl ? `${baseUrl}/auth/callback` : "");
   const allowedTenantKey = process.env.FEISHU_ALLOWED_TENANT_KEY?.trim()
     || (process.env.FEISHU_ALLOWED_TENANT_KEYS ?? "").split(",").map((item) => item.trim()).filter(Boolean)[0];
-  if (!appId || !appSecret || !redirectUri || !allowedTenantKey)
+  if (!appId || !appSecret || !redirectUri || (options.requireTenantKey !== false && !allowedTenantKey))
     throw new FeishuLoginError("configuration");
   try {
     const parsed = new URL(redirectUri);
@@ -43,6 +43,11 @@ export function isFeishuLoginConfigured() {
   }
 }
 
+/** 仅用于首次读取企业标识；该模式绝不创建平台登录 Session。 */
+export function isFeishuTenantDiscoveryEnabled() {
+  return process.env.FEISHU_TENANT_DISCOVERY?.trim().toLowerCase() === "true";
+}
+
 async function fetchEnvelope<T>(url: string, init: RequestInit) {
   let response: Response;
   try {
@@ -60,7 +65,7 @@ async function fetchEnvelope<T>(url: string, init: RequestInit) {
  * 该地址只包含公开的 App ID、回调地址和一次性 state，不包含 App Secret 或用户 Token。
  */
 export function getFeishuQrGotoUrl(state: string) {
-  const { appId, redirectUri } = configuration();
+  const { appId, redirectUri } = configuration({ requireTenantKey: false });
   const url = new URL(QR_AUTHORIZE);
   url.searchParams.set("client_id", appId);
   url.searchParams.set("redirect_uri", redirectUri);
@@ -70,7 +75,7 @@ export function getFeishuQrGotoUrl(state: string) {
 }
 
 export function getFeishuLoginUrl(state: string) {
-  const { appId, redirectUri } = configuration();
+  const { appId, redirectUri } = configuration({ requireTenantKey: false });
   const url = new URL(`${API}/authen/v1/index`);
   url.searchParams.set("app_id", appId);
   url.searchParams.set("redirect_uri", redirectUri);
@@ -78,8 +83,8 @@ export function getFeishuLoginUrl(state: string) {
   return url.toString();
 }
 
-export async function exchangeCode(code: string) {
-  const { appId, appSecret, allowedTenantKey } = configuration();
+export async function getFeishuUserIdentity(code: string) {
+  const { appId, appSecret } = configuration({ requireTenantKey: false });
   const appToken = await fetchEnvelope<FeishuToken>(`${API}/auth/v3/app_access_token/internal`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -96,7 +101,6 @@ export async function exchangeCode(code: string) {
     headers: { Authorization: `Bearer ${loginToken.data.access_token}` },
   });
   if (!user.data?.open_id || !user.data.name || !user.data.tenant_key) throw new FeishuLoginError("remote");
-  if (user.data.tenant_key !== allowedTenantKey) throw new FeishuLoginError("unauthorized_tenant");
   return {
     openId: user.data.open_id,
     unionId: user.data.union_id,
@@ -107,8 +111,15 @@ export async function exchangeCode(code: string) {
   };
 }
 
+export async function exchangeCode(code: string) {
+  const { allowedTenantKey } = configuration();
+  const user = await getFeishuUserIdentity(code);
+  if (user.tenantKey !== allowedTenantKey) throw new FeishuLoginError("unauthorized_tenant");
+  return user;
+}
+
 export async function getTenantAccessToken() {
-  const { appId, appSecret } = configuration();
+  const { appId, appSecret } = configuration({ requireTenantKey: false });
   const token = await fetchEnvelope<TenantToken>(`${API}/auth/v3/tenant_access_token/internal`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

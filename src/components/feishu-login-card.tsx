@@ -27,7 +27,7 @@ function errorText(value?: string) {
   return value ? messages[value] || messages.failed : "";
 }
 
-export function FeishuLoginCard({ returnTo, initialError }: { returnTo: string; initialError?: string }) {
+export function FeishuLoginCard({ returnTo, initialError, tenantKey }: { returnTo: string; initialError?: string; tenantKey?: string }) {
   const [status, setStatus] = useState<LoginStatus>(initialError ? "error" : "loading");
   const [message, setMessage] = useState(errorText(initialError));
   const instanceRef = useRef<{ matchOrigin: (origin: string) => boolean; matchData: (data: unknown) => boolean } | undefined>(undefined);
@@ -68,6 +68,7 @@ export function FeishuLoginCard({ returnTo, initialError }: { returnTo: string; 
   }, [returnTo]);
 
   useEffect(() => {
+    if (tenantKey) return;
     const handleMessage = (event: MessageEvent) => {
       const qr = instanceRef.current;
       if (!qr || !qr.matchOrigin(event.origin) || !qr.matchData(event.data)) return;
@@ -85,8 +86,9 @@ export function FeishuLoginCard({ returnTo, initialError }: { returnTo: string; 
       window.clearTimeout(timer);
       window.removeEventListener("message", handleMessage);
     };
-  }, [loadQrCode]);
+  }, [loadQrCode, tenantKey]);
 
   const directLogin = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
+  if (tenantKey) return <main className="login-page"><section className="login-card tenant-discovery-card"><span className="login-mark">✓</span><h1>已读取企业标识</h1><p>请复制下面的值，填写到服务器配置。</p><code className="tenant-key-value">{tenantKey}</code><p className="tenant-key-hint">填写 <b>FEISHU_ALLOWED_TENANT_KEY</b> 后，删除 <b>FEISHU_TENANT_DISCOVERY=true</b> 并重启服务。</p><a className="login-fallback" href="/login">完成后重新登录</a></section></main>;
   return <main className="login-page"><section className="login-card" aria-labelledby="login-title"><span className="login-mark">▣</span><h1 id="login-title">需求管理平台</h1><p>使用飞书扫码登录</p><div className="login-qr-shell" aria-live="polite"><div id="feishu-login-qr" />{status === "loading" ? <span>正在加载二维码…</span> : null}{status === "expired" ? <div className="login-qr-overlay"><b>二维码已失效</b><button onClick={() => void loadQrCode()}>刷新二维码</button></div> : null}{status === "error" ? <div className="login-qr-overlay is-error"><b>登录暂不可用</b><button onClick={() => void loadQrCode()}>重新尝试</button></div> : null}</div><p className={`login-status ${status === "error" ? "is-error" : ""}`}>{message || (status === "confirming" ? "正在登录…" : status === "ready" ? "请使用公司飞书扫码" : "")}</p><a className="login-fallback" href={directLogin}>二维码无法显示？打开飞书授权页</a><small>仅限公司内部成员访问</small></section></main>;
 }

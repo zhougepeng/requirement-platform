@@ -426,6 +426,9 @@ html::-webkit-scrollbar-thumb:hover, body::-webkit-scrollbar-thumb:hover, .sideb
 .login-status.is-error { color:#d92d20 !important; }
 .login-fallback { margin-top:8px; color:#3370ff; font-size:12px; text-decoration:none; }
 .login-card small { margin-top:15px; color:#a6aab2; font-size:11px; }
+.tenant-discovery-card { min-height:330px; align-content:center; }
+.tenant-key-value { width:100%; margin:18px 0 10px; overflow-wrap:anywhere; border:1px solid #bfd3ff; border-radius:6px; padding:11px; color:#175cd3; background:#f5f8ff; font-size:12px; text-align:left; user-select:all; }
+.tenant-key-hint { max-width:300px; color:#667085 !important; font-size:12px !important; line-height:1.6; text-align:center; }
 
 .version-assets { display:grid; grid-template-columns:260px minmax(0,1fr); min-height:calc(100dvh - 92px); background:#fff; }
 .version-assets>aside { border-right:1px solid #eaecf0; padding:12px; overflow:auto; }

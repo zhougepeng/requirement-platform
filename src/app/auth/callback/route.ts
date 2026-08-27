@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { exchangeCode, FeishuLoginError } from "@/services/auth/feishu-auth";
+import { exchangeCode, FeishuLoginError, getFeishuUserIdentity, isFeishuTenantDiscoveryEnabled } from "@/services/auth/feishu-auth";
 import { registerLoginEmployee } from "@/services/auth/employee-store";
 import { decodeOAuthLoginState, encodeSession, OAUTH_STATE_COOKIE, SESSION_COOKIE, shouldUseSecureCookies } from "@/services/auth/session";
 import { publicAppUrl } from "@/lib/public-app-url";
@@ -20,6 +20,12 @@ export async function GET(request: Request) {
   if (!state || !savedLogin || state !== savedLogin.state) return loginPage("state");
   if (!code) return loginPage(url.searchParams.get("error") === "access_denied" ? "cancelled" : "failed");
   try {
+    if (isFeishuTenantDiscoveryEnabled()) {
+      const user = await getFeishuUserIdentity(code);
+      const response = NextResponse.redirect(publicAppUrl(`/login?tenantKey=${encodeURIComponent(user.tenantKey ?? "")}`, request.url));
+      response.cookies.set(OAUTH_STATE_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
+      return response;
+    }
     const user = await exchangeCode(code);
     await registerLoginEmployee(user);
     const response = NextResponse.redirect(publicAppUrl(savedLogin.returnTo, request.url));
