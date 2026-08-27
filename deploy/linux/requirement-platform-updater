@@ -33,7 +33,10 @@ run_update() {
 
 case "${1:-}" in
   --start)
-    systemd-run --quiet --unit="${UNIT_NAME}-$(date +%s)-$RANDOM" --property=Type=oneshot "$0" --apply
+    # Do not wait for the installer to finish here. The installer restarts the
+    # web service, so waiting would terminate the HTTP request before its JSON
+    # response can be returned to the browser.
+    systemd-run --no-block --quiet --unit="${UNIT_NAME}-$(date +%s)-$RANDOM" --property=Type=oneshot "$0" --apply
     echo "Update job started."
     ;;
   --apply)

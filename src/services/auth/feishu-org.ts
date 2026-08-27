@@ -9,6 +9,7 @@ const MAX_ITEMS = 10_000;
 type Envelope<T> = { code?: number; msg?: string; data?: T };
 type Page<T> = { items?: T[]; has_more?: boolean; page_token?: string };
 type Department = { open_department_id?: string; department_id?: string; name?: string };
+type ContactScope = { authed_departments?: Array<{ open_department_id?: string; department_id?: string; department_id_type?: string; name?: string }> };
 type User = { open_id?: string; user_id?: string; name?: string; avatar?: { avatar_origin?: string; avatar_72?: string }; avatar_url?: string; tenant_key?: string; status?: { is_active?: boolean }; active?: boolean };
 
 export type FeishuEmployee = { openId: string; name: string; avatarUrl?: string; tenantKey?: string; departmentNames: string[]; directoryActive: boolean };
@@ -23,6 +24,16 @@ async function fetchPage<T>(url: URL, token: string) {
   const payload = await response.json() as Envelope<Page<T>>;
   if (!response.ok || payload.code !== 0 || !payload.data) throw new Error(`飞书通讯录请求失败：${payload.code ?? response.status}${payload.msg ? `，${payload.msg}` : ""}`);
   return payload.data;
+}
+
+async function fetchContactScopeRoots(token: string) {
+  const response = await fetch(`${API}/contact/v3/scopes`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: AbortSignal.timeout(20_000) });
+  const payload = await response.json() as Envelope<ContactScope>;
+  if (!response.ok || payload.code !== 0 || !payload.data) throw new Error(`飞书通讯录授权范围读取失败：${payload.code ?? response.status}${payload.msg ? `，${payload.msg}` : ""}`);
+  return (payload.data.authed_departments ?? []).flatMap((department) => {
+    const id = department.open_department_id ?? department.department_id;
+    return id ? [{ id, name: department.name || "已授权部门" }] : [];
+  });
 }
 
 async function listDirectChildren(token: string, departmentId: string) {
@@ -67,7 +78,9 @@ async function listDepartmentUsers(token: string, departmentId: string) {
 /** Reads the app-visible Feishu directory and returns one record per employee. */
 export async function fetchFeishuEmployees() {
   const token = await getTenantAccessToken();
-  const departments = [{ id: "0", name: "组织架构", path: ["组织架构"] }];
+  // 部分通讯录授权时从根部门 0 往下查，飞书可能不会返回被授权部门；先读取应用实际授权范围。
+  const authorizedRoots = await fetchContactScopeRoots(token);
+  const departments = (authorizedRoots.length ? authorizedRoots : [{ id: "0", name: "组织架构" }]).map((department) => ({ ...department, path: [department.name] }));
   for (let index = 0; index < departments.length; index += 1) {
     const parent = departments[index];
     for (const child of await listDirectChildren(token, parent.id)) {

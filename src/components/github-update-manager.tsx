@@ -14,8 +14,22 @@ type UpdateStatus = {
 
 async function request<T>(url: string, init?: RequestInit) {
   const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
-  const payload = await response.json() as { data?: T; error?: string };
-  if (!response.ok || !payload.data) throw new Error(payload.error || "更新检查失败。");
+  const body = await response.text();
+  let payload: { data?: T; error?: string } = {};
+  if (body) {
+    try {
+      payload = JSON.parse(body) as { data?: T; error?: string };
+    } catch {
+      throw new Error(response.status === 502
+        ? "更新服务在返回结果前断开。请稍后刷新页面确认版本；若版本未变化，请在服务器查看更新日志。"
+        : "更新服务返回了无法识别的结果，请稍后重试。");
+    }
+  }
+  if (!response.ok || !payload.data) {
+    throw new Error(payload.error || (response.status === 502
+      ? "更新服务在返回结果前断开。请稍后刷新页面确认版本；若版本未变化，请在服务器查看更新日志。"
+      : "更新检查失败。"));
+  }
   return payload.data;
 }
 
