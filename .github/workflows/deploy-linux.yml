@@ -27,7 +27,7 @@ jobs:
           npm ci
           npm run build
           mkdir -p release/.next/standalone/.next
-          cp -a .next/standalone release/
+          cp -a .next/standalone/. release/.next/standalone/
           cp -a .next/static release/.next/standalone/.next/static
           if [[ -d public ]]; then cp -a public release/.next/standalone/public; fi
           test -f release/.next/standalone/server.js
