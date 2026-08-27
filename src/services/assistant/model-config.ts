@@ -22,6 +22,10 @@ type StoredModel = {
 
 type ModelStore = { schemaVersion: 1; models: StoredModel[] };
 
+class ModelStorageError extends Error {
+  statusCode = 500;
+}
+
 export type ModelSummary = Omit<StoredModel, "apiKey"> & { hasApiKey: boolean };
 export type CreateModelInput = { name: string; baseUrl: string; model: string; apiKey: string; isDefault?: boolean };
 export type UpdateModelInput = { id: string; name?: string; baseUrl?: string; model?: string; apiKey?: string; isDefault?: boolean };
@@ -57,18 +61,28 @@ function validate(input: CreateModelInput) {
 async function readStore(): Promise<ModelStore> {
   try {
     const parsed = JSON.parse(await readFile(MODEL_FILE, "utf8")) as Partial<ModelStore>;
-    if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.models)) throw new Error("invalid");
+    if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.models)) {
+      throw new ModelStorageError(`模型配置文件格式无效：${MODEL_FILE}`);
+    }
     return { schemaVersion: 1, models: parsed.models.filter((item): item is StoredModel => Boolean(item?.id && item.name && item.baseUrl && item.model && item.apiKey)) };
-  } catch {
-    return { schemaVersion: 1, models: [] };
+  } catch (error) {
+    if (error instanceof ModelStorageError) throw error;
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { schemaVersion: 1, models: [] };
+    const reason = error instanceof Error ? error.message : "未知错误";
+    throw new ModelStorageError(`无法读取模型配置文件，请检查数据目录权限：${MODEL_FILE}（${reason}）`);
   }
 }
 
 async function writeStore(store: ModelStore) {
-  await mkdir(DATA_DIR, { recursive: true });
-  const temporary = `${MODEL_FILE}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(store, null, 2), "utf8");
-  await rename(temporary, MODEL_FILE);
+  try {
+    await mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
+    const temporary = `${MODEL_FILE}.${randomUUID()}.tmp`;
+    await writeFile(temporary, JSON.stringify(store, null, 2), { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, MODEL_FILE);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "未知错误";
+    throw new ModelStorageError(`无法保存模型配置，请检查服务用户对数据目录的写入权限：${DATA_DIR}（${reason}）`);
+  }
 }
 
 async function mutate<T>(operation: (store: ModelStore) => T | Promise<T>): Promise<T> {
