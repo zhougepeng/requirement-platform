@@ -22,7 +22,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return payload.data;
 }
 
-export function ModelManager({ initialOpen = false, hideTrigger = false }: { initialOpen?: boolean; hideTrigger?: boolean }) {
+export function ModelManager({ initialOpen = false, hideTrigger = false, onClose }: { initialOpen?: boolean; hideTrigger?: boolean; onClose?: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [open, setOpen] = useState(initialOpen);
   const [models, setModels] = useState<ModelSummary[]>([]);
@@ -106,13 +106,19 @@ export function ModelManager({ initialOpen = false, hideTrigger = false }: { ini
     }
   }
 
+  function close() {
+    setFormOpen(false);
+    setOpen(false);
+    onClose?.();
+  }
+
   return <>
     {!hideTrigger ? <div className="model-manager-menu">
       <button className="model-manager-trigger" onClick={() => setMenuOpen((current) => !current)} title="设置" aria-label="设置" aria-expanded={menuOpen}><Icon name="settings" /></button>
       {menuOpen ? <><button className="model-manager-menu-dismiss" aria-label="关闭设置菜单" onClick={() => setMenuOpen(false)} /><div className="model-manager-popover" role="menu"><button role="menuitem" onClick={() => { setMenuOpen(false); setOpen(true); void loadModels(); }}><Icon name="settings" /><span>模型管理</span></button></div></> : null}
     </div> : null}
-    {open ? <div className="model-manager-layer" role="presentation"><button className="model-manager-backdrop" aria-label="关闭模型管理" onClick={() => setOpen(false)} /><section className="model-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="model-manager-title">
-      <header><div><h2 id="model-manager-title">模型管理</h2><p>管理需求库 AI 助手使用的模型配置。</p></div><button className="model-manager-close" onClick={() => setOpen(false)} aria-label="关闭模型管理"><Icon name="close" /></button></header>
+    {open ? <div className="model-manager-layer" role="presentation"><button className="model-manager-backdrop" aria-label="关闭模型管理" onClick={close} /><section className="model-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="model-manager-title">
+      <header><div><h2 id="model-manager-title">模型管理</h2><p>管理需求库 AI 助手使用的模型配置。</p></div><button className="model-manager-close" onClick={close} aria-label="关闭模型管理"><Icon name="close" /></button></header>
       <div className="model-manager-body">
         <div className="model-manager-toolbar"><span>{models.length ? `已配置 ${models.length} 个模型` : "尚未添加模型"}</span><button className="model-manager-add" onClick={beginCreate}><Icon name="plus" />新增模型</button></div>
         {error && <p className="model-manager-error">{error}</p>}

@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
     await actorFromRequest(request);
-    return apiJson(await listProjects());
+    const includeArchived = new URL(request.url).searchParams.get("include_archived") === "true";
+    return apiJson(await listProjects(includeArchived));
   } catch (error) {
     return apiError(error);
   }

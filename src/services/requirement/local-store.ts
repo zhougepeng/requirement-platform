@@ -254,9 +254,32 @@ async function mutate<T>(operation: (store: RequirementStore) => Promise<T> | T)
   }
 }
 
-export async function listProjects() {
+function archived(value: { archivedAt?: string }) {
+  return Boolean(value.archivedAt);
+}
+
+function projectWithRequirementSummaries(store: RequirementStore, project: Project, includeArchived: boolean) {
+  const requirements = project.requirements.flatMap((summary) => {
+    const requirement = store.requirements.find((item) => item.code === summary.code);
+    if (!requirement || (!includeArchived && archived(requirement))) return [];
+    const currentVersion = store.versions.find((item) => item.id === requirement.currentVersionId);
+    return [{
+      ...summary,
+      createdAt: requirement.createdAt ?? summary.createdAt,
+      updatedAt: requirement.updatedAt ?? summary.updatedAt,
+      owner: requirement.owner ?? summary.owner ?? currentVersion?.publisher,
+      archivedAt: requirement.archivedAt,
+      archivedBy: requirement.archivedBy,
+    }];
+  });
+  return { ...project, requirements };
+}
+
+export async function listProjects(includeArchived = false) {
   const store = await ensureStore();
-  return clone(store.projects);
+  return clone(store.projects
+    .filter((project) => includeArchived || !archived(project))
+    .map((project) => projectWithRequirementSummaries(store, project, includeArchived)));
 }
 
 export async function createProject(input: CreateProjectInput, actor?: { id: string; name: string }) {
@@ -300,6 +323,30 @@ export async function updateProject(projectId: string, input: UpdateProjectInput
   });
 }
 
+export async function archiveProject(projectId: string, actor?: { id: string; name: string }) {
+  return mutate((store) => {
+    const project = store.projects.find((item) => item.id === projectId);
+    if (!project) throw new Error("项目不存在。");
+    if (archived(project)) return clone(project);
+    project.archivedAt = now();
+    project.archivedBy = actor?.name || "本地开发身份";
+    project.updatedAt = project.archivedAt;
+    return clone(project);
+  });
+}
+
+export async function restoreProject(projectId: string) {
+  return mutate((store) => {
+    const project = store.projects.find((item) => item.id === projectId);
+    if (!project) throw new Error("项目不存在。");
+    if (!archived(project)) return clone(project);
+    project.archivedAt = undefined;
+    project.archivedBy = undefined;
+    project.updatedAt = now();
+    return clone(project);
+  });
+}
+
 export async function getProject(projectId: string) {
   const store = await ensureStore();
   const project = store.projects.find((item) => item.id === projectId);
@@ -317,20 +364,54 @@ export async function getRequirementDetail(requirementCode: string): Promise<Req
   return clone({ project, requirement, currentVersion });
 }
 
-export async function listProjectRequirements(projectId: string) {
+export async function listProjectRequirements(projectId: string, includeArchived = false) {
   const store = await ensureStore();
   const project = store.projects.find((item) => item.id === projectId);
   if (!project) throw new Error("项目不存在。");
-  return clone(project.requirements.map((summary) => {
-    const requirement = store.requirements.find((item) => item.code === summary.code);
-    const currentVersion = requirement ? store.versions.find((item) => item.id === requirement.currentVersionId) : undefined;
-    return {
-      ...summary,
-      createdAt: requirement?.createdAt ?? summary.createdAt,
-      updatedAt: requirement?.updatedAt ?? summary.updatedAt,
-      owner: requirement?.owner ?? summary.owner ?? currentVersion?.publisher,
-    };
-  }));
+  if (archived(project) && !includeArchived) return [];
+  return clone(projectWithRequirementSummaries(store, project, includeArchived).requirements);
+}
+
+export async function archiveRequirement(requirementCode: string, actor?: { id: string; name: string }) {
+  return mutate((store) => {
+    const requirement = store.requirements.find((item) => item.code === requirementCode);
+    if (!requirement) throw new Error("需求不存在。");
+    if (archived(requirement)) return clone(requirement);
+    const project = store.projects.find((item) => item.id === requirement.projectId);
+    if (!project) throw new Error("需求所属项目不存在。");
+    requirement.archivedAt = now();
+    requirement.archivedBy = actor?.name || "本地开发身份";
+    requirement.updatedAt = requirement.archivedAt;
+    const summary = project.requirements.find((item) => item.code === requirementCode);
+    if (summary) {
+      summary.archivedAt = requirement.archivedAt;
+      summary.archivedBy = requirement.archivedBy;
+      summary.updatedAt = requirement.updatedAt;
+    }
+    project.updatedAt = requirement.updatedAt;
+    return clone(requirement);
+  });
+}
+
+export async function restoreRequirement(requirementCode: string) {
+  return mutate((store) => {
+    const requirement = store.requirements.find((item) => item.code === requirementCode);
+    if (!requirement) throw new Error("需求不存在。");
+    if (!archived(requirement)) return clone(requirement);
+    const project = store.projects.find((item) => item.id === requirement.projectId);
+    if (!project) throw new Error("需求所属项目不存在。");
+    requirement.archivedAt = undefined;
+    requirement.archivedBy = undefined;
+    requirement.updatedAt = now();
+    const summary = project.requirements.find((item) => item.code === requirementCode);
+    if (summary) {
+      summary.archivedAt = undefined;
+      summary.archivedBy = undefined;
+      summary.updatedAt = requirement.updatedAt;
+    }
+    project.updatedAt = requirement.updatedAt;
+    return clone(requirement);
+  });
 }
 
 export async function listVersions(requirementCode: string) {
@@ -356,6 +437,7 @@ export async function searchRequirements(query: string) {
   const store = await ensureStore();
   return clone(store.requirements.flatMap((requirement) => {
     const project = store.projects.find((item) => item.id === requirement.projectId);
+    if (archived(requirement) || !project || archived(project)) return [];
     const currentVersion = store.versions.find((item) => item.id === requirement.currentVersionId);
     const haystack = `${requirement.code} ${requirement.title} ${currentVersion?.prd ?? ""}`.toLowerCase();
     return haystack.includes(normalized) ? [{
@@ -404,7 +486,7 @@ export async function findRequirementKnowledge(query: string, limit = 4): Promis
   const ranked = store.requirements.flatMap((requirement) => {
     const version = store.versions.find((item) => item.id === requirement.currentVersionId);
     const project = store.projects.find((item) => item.id === requirement.projectId);
-    if (!version || !project) return [];
+    if (!version || !project || archived(requirement) || archived(project)) return [];
     const code = requirement.code.toLowerCase();
     const title = requirement.title.toLowerCase();
     const projectName = project.name.toLowerCase();
@@ -512,10 +594,12 @@ export async function publishRequirement(input: PublishRequirementInput) {
     const project = store.projects.find((item) => item.id === projectCode);
     const artifact = store.artifacts.find((item) => item.id === input.artifactId);
     if (!project) throw new Error("项目不存在。");
+    if (archived(project)) throw new Error("已作废项目不能发布需求，请先恢复项目。");
     if (!artifact) throw new Error("Demo 工件不存在。");
 
     const requirementCode = requestedRequirementCode || nextRequirementCode(project.id, store);
     let requirement = store.requirements.find((item) => item.code === requirementCode);
+    if (requirement?.archivedAt) throw new Error("已作废需求不能发布新版本，请先恢复需求。");
     if (!requirement) {
       requirement = { id: requirementCode, projectId: project.id, code: requirementCode, title, currentVersionId: "", createdAt: now(), updatedAt: now(), owner: input.actor?.name || "张三（本地开发身份）" };
       store.requirements.push(requirement);
@@ -586,6 +670,7 @@ export async function publishRequirementSnapshot(input: PublishRequirementSnapsh
     if (!requirement) throw new Error("需求不存在。");
     const project = store.projects.find((item) => item.id === requirement.projectId);
     if (!project) throw new Error("需求所属项目不存在。");
+    if (archived(project) || archived(requirement)) throw new Error("已作废项目或需求不能发布新版本，请先恢复后再操作。");
     const number = store.versions.filter((item) => item.requirementCode === requirementCode).reduce((max, item) => Math.max(max, item.number), 0) + 1;
     const demoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);
     const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: input.actor?.name || "本地开发身份", changeSummary, prd, demoEntryUrl, artifactId: `snapshot_${randomUUID().replaceAll("-", "")}`, versionName: input.versionName?.trim().slice(0, 80) || undefined, assetManifest: manifest };
@@ -620,6 +705,7 @@ export async function restoreRequirementVersion(requirementCode: string, sourceV
     if (!requirement || !source) throw new Error("需求或历史版本不存在。");
     const project = store.projects.find((item) => item.id === requirement.projectId);
     if (!project) throw new Error("需求所属项目不存在。");
+    if (archived(project) || archived(requirement)) throw new Error("已作废项目或需求不能恢复版本，请先恢复后再操作。");
     const manifest = await legacyManifest(store, source);
     const number = store.versions.filter((item) => item.requirementCode === requirementCode).reduce((max, item) => Math.max(max, item.number), 0) + 1;
     const demoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);

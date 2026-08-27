@@ -5,11 +5,12 @@ import { actorFromRequest } from "@/services/auth/request-actor";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, { params }: { params: Promise<{ projectId: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ projectId: string }> }) {
   try {
-    await actorFromRequest(_request);
+    await actorFromRequest(request);
     const { projectId } = await params;
-    return apiJson(await listProjectRequirements(projectId));
+    const includeArchived = new URL(request.url).searchParams.get("include_archived") === "true";
+    return apiJson(await listProjectRequirements(projectId, includeArchived));
   } catch (error) {
     return apiError(error);
   }

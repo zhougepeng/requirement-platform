@@ -253,6 +253,24 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 .favorite-button.is-favorite { color:#d97706; }
 .favorite-button.is-favorite svg { fill:#fef3c7; }
 .favorite-button svg { width:16px; height:16px; }
+.project-archive-button { position:absolute; z-index:1; top:50%; right:58px; display:grid; width:28px; height:28px; place-items:center; border:0; border-radius:5px; color:#98a2b3; background:transparent; opacity:0; transform:translateY(-50%); }
+.project-row:hover .project-archive-button { opacity:1; }
+.project-archive-button:hover,.requirement-archive-button:hover,.detail-archive-button:hover { color:#b42318; background:#fef3f2; }
+.project-archive-button.is-restore,.requirement-archive-button.is-restore,.detail-archive-button.is-restore { color:#067647; }
+.project-archive-button.is-restore:hover,.requirement-archive-button.is-restore:hover,.detail-archive-button.is-restore:hover { color:#067647; background:#ecfdf3; }
+.project-archive-button svg,.requirement-archive-button svg,.detail-archive-button svg { width:15px; height:15px; }
+.project-row:hover .project-edit-button { right:88px; }
+.project-row:hover .favorite-button { right:28px; }
+.requirement-row { position:relative; }
+.requirement-archive-button { position:absolute; z-index:1; top:50%; right:30px; display:grid; width:28px; height:28px; place-items:center; border:0; border-radius:5px; color:#98a2b3; background:transparent; opacity:0; transform:translateY(-50%); }
+.requirement-row:hover .requirement-archive-button { opacity:1; }
+.requirement-row:has(.requirement-archive-button) > button { padding-right:68px; }
+.archive-badge { display:inline-flex; align-items:center; height:18px; margin-left:7px; border:1px solid #fecdca; border-radius:4px; padding:0 5px; color:#b42318; background:#fff5f4; font-size:10px; font-style:normal; font-weight:600; line-height:1; vertical-align:middle; }
+.project-row.is-archived,.requirement-row.is-archived,.project-nav.is-archived { background:#fffbfa; }
+.project-row.is-archived .project-row-open,.requirement-row.is-archived > button,.project-nav.is-archived { color:#7a271a; }
+.sidebar-action-popover { width:228px; }
+.profile-toggle { justify-content:space-between; gap:10px; white-space:normal; }
+.profile-toggle svg { flex:0 0 auto; width:15px; height:15px; color:#175cd3; }
 .requirement-list button { display:grid; width:100%; align-items:center; gap:0; border:0; border-bottom:1px solid #edf0f3; padding:11px 8px; color:#334155; background:transparent; text-align:left; }
 .requirement-list button:hover { background:#f8fafc; }
 .requirement-list button > span:last-child { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-left:10px; color:#475467; font-size:12px; font-weight:560; }
