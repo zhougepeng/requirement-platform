@@ -20,3 +20,6 @@ export const findRequirementKnowledge = localStore.findRequirementKnowledge;
 export const addComment = localStore.addComment;
 export const uploadArtifact = localStore.uploadArtifact;
 export const publishRequirement = localStore.publishRequirement;
+export const publishRequirementSnapshot = localStore.publishRequirementSnapshot;
+export const downloadRequirementVersion = localStore.downloadRequirementVersion;
+export const restoreRequirementVersion = localStore.restoreRequirementVersion;

@@ -22,6 +22,17 @@ export function createState() {
   return randomBytes(32).toString("base64url");
 }
 
+/**
+ * 生产环境默认只发送 Secure Cookie。仅为没有 HTTPS 域名的短期 IP 调试提供显式降级开关；
+ * 不配置时始终沿用安全默认值。
+ */
+export function shouldUseSecureCookies() {
+  const configured = process.env.AUTH_COOKIE_SECURE?.trim().toLowerCase();
+  if (configured === "true") return true;
+  if (configured === "false") return false;
+  return process.env.NODE_ENV === "production";
+}
+
 export function safeReturnTo(value?: string | null) {
   const candidate = String(value || "").trim();
   return candidate.startsWith("/") && !candidate.startsWith("//") && !candidate.includes("\\") && !/[\u0000-\u001f]/.test(candidate) ? candidate : "/";

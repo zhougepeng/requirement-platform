@@ -8,7 +8,13 @@ export type RequirementVersion = {
   prd: string;
   demoEntryUrl: string;
   artifactId: string;
+  versionName?: string;
+  sourceVersionNo?: number;
+  assetManifest?: RequirementAssetManifest;
 };
+
+export type RequirementAssetFile = { path: string; size: number; hash: string; mimeType: string };
+export type RequirementAssetManifest = { files: RequirementAssetFile[]; totalFiles: number; totalSize: number; createdAt: string };
 
 export type RequirementComment = {
   id: string;

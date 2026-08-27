@@ -16,8 +16,8 @@
    AUTH_SESSION_SECRET=至少32位随机字符串
    FEISHU_APP_ID=cli_xxx
    FEISHU_APP_SECRET=飞书应用密钥
-   FEISHU_ALLOWED_TENANT_KEYS=你的租户key
-   # 可选：不填写时，首个成功登录且当前没有启用管理员的账号自动成为管理员
+   FEISHU_ALLOWED_TENANT_KEY=你的租户key
+   # 可选：首次扫码默认普通成员；如需管理员，请明确填写 open_id
    FEISHU_ADMIN_OPEN_IDS=首位管理员的open_id
    FEISHU_PUBLISHER_OPEN_IDS=产品经理的open_id
    MCP_API_TOKEN=独立且足够长的随机令牌
@@ -44,7 +44,7 @@
 ## 验收
 
 1. 未登录打开域名会跳转飞书登录；开发模式页面底部也可随时点击“飞书登录”进入授权。
-2. 首次登录的员工会登记到本机员工目录；当目录还没有启用管理员时，首个成功登录账号自动获得管理员权限。之后管理员可在“员工与权限”中启用员工、设置管理员。
+2. 首次登录的员工会登记为普通成员；通过 `FEISHU_ADMIN_OPEN_IDS` 指定的账号才会成为启动管理员，之后管理员可在“员工与权限”中设置其他管理员。
 3. 未被管理员启用的员工不能读取项目、需求、Demo 或使用 AI。
 4. 管理员在左侧底部“员工与权限”中同步飞书组织架构，并逐个启用员工或设置管理员。
 5. 普通启用员工能查看 PRD、Demo、评论和使用 AI；只有发布者白名单中的启用员工能上传和发布。

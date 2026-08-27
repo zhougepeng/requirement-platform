@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 由 requirement-platform-backup.service 调用。备份只包含平台数据，不复制 .env.local 中的密钥。
+PLATFORM_ROOT="${REQUIREMENT_PLATFORM_INSTALL_DIR:-/opt/requirement-platform}"
+DATA_DIR="${REQUIREMENT_PLATFORM_DATA_DIR:-$PLATFORM_ROOT/data}"
+BACKUP_DIR="${REQUIREMENT_PLATFORM_BACKUP_DIR:-$PLATFORM_ROOT/backups}"
+RETENTION_DAYS="${REQUIREMENT_PLATFORM_BACKUP_RETENTION_DAYS:-14}"
+
+if [[ ! "$RETENTION_DAYS" =~ ^[1-9][0-9]{0,3}$ ]]; then
+  echo "REQUIREMENT_PLATFORM_BACKUP_RETENTION_DAYS must be a positive integer." >&2
+  exit 2
+fi
+if [[ ! -d "$DATA_DIR" ]]; then
+  echo "Platform data directory does not exist: $DATA_DIR" >&2
+  exit 1
+fi
+
+umask 077
+mkdir -p "$BACKUP_DIR"
+data_real="$(cd "$DATA_DIR" && pwd -P)"
+backup_real="$(cd "$BACKUP_DIR" && pwd -P)"
+if [[ "$backup_real" == "$data_real" || "$backup_real" == "$data_real/"* ]]; then
+  echo "Backup directory must be outside the platform data directory." >&2
+  exit 2
+fi
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+archive="$BACKUP_DIR/requirement-platform-data-$timestamp.tar.gz"
+temporary="$archive.tmp"
+
+# 写入临时文件后再原子替换；运行中恰好有发布操作时最多重试一次，避免保留半包。
+for attempt in 1 2; do
+  rm -f "$temporary"
+  if tar -C "$(dirname "$DATA_DIR")" -czf "$temporary" "$(basename "$DATA_DIR")"; then
+    mv -f "$temporary" "$archive"
+    sha256sum "$archive" >"$archive.sha256"
+    find "$BACKUP_DIR" -maxdepth 1 -type f \( -name 'requirement-platform-data-*.tar.gz' -o -name 'requirement-platform-data-*.tar.gz.sha256' \) -mtime +"$RETENTION_DAYS" -delete
+    echo "Backup created: $archive"
+    exit 0
+  fi
+  rm -f "$temporary"
+  sleep 2
+done
+
+echo "Backup failed after two attempts; no incomplete archive was retained." >&2
+exit 1

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Requirement Platform data backup every day
+
+[Timer]
+OnCalendar=*-*-* 02:20:00
+Persistent=true
+Unit=__SERVICE_NAME__-backup.service
+
+[Install]
+WantedBy=timers.target

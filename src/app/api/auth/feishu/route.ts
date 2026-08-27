@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getFeishuQrGotoUrl } from "@/services/auth/feishu-auth";
-import { createOAuthLoginState, OAUTH_STATE_COOKIE, safeReturnTo } from "@/services/auth/session";
+import { createOAuthLoginState, OAUTH_STATE_COOKIE, safeReturnTo, shouldUseSecureCookies } from "@/services/auth/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export async function GET(request: Request) {
     response.cookies.set(OAUTH_STATE_COOKIE, loginState.cookieValue, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: shouldUseSecureCookies(),
       path: "/",
       maxAge: 600,
     });

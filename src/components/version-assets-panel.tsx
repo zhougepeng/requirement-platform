@@ -1,0 +1,10 @@
+"use client";
+
+import type { RequirementVersion } from "@/lib/types";
+
+function size(value = 0) { return value < 1024 * 1024 ? `${Math.max(1, Math.ceil(value / 1024))} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`; }
+
+export function VersionAssetsPanel({ requirementCode, versions, selected, canPublish, onSelect, onRestore }: { requirementCode: string; versions: RequirementVersion[]; selected: RequirementVersion; canPublish?: boolean; onSelect: (id: string) => void; onRestore: (version: RequirementVersion) => void }) {
+  const manifest = selected.assetManifest;
+  return <section className="version-assets"><aside>{versions.map((version) => <button key={version.id} className={version.id === selected.id ? "is-selected" : ""} onClick={() => onSelect(version.id)}><b>V{version.number}{version.versionName ? ` · ${version.versionName}` : ""}</b><span>{version.id === versions.find((item) => item.number === Math.max(...versions.map((item) => item.number)))?.id ? "当前版本" : version.publishedAt}</span><small>{version.changeSummary}</small></button>)}</aside><article><div className="version-assets-head"><div><small>版本快照</small><h2>V{selected.number}{selected.versionName ? ` · ${selected.versionName}` : ""}</h2><p>{selected.changeSummary}</p></div><div><a className="publish-button" href={`/api/v1/requirements/${encodeURIComponent(requirementCode)}/versions/${selected.number}/download`}>下载此版本</a>{canPublish ? <button className="project-dialog-cancel" onClick={() => onRestore(selected)}>恢复为当前版本</button> : null}</div></div><dl><div><dt>发布时间</dt><dd>{selected.publishedAt}</dd></div><div><dt>发布人</dt><dd>{selected.publisher}</dd></div><div><dt>文件数量</dt><dd>{manifest?.totalFiles ?? "旧版本"}</dd></div><div><dt>总大小</dt><dd>{manifest ? size(manifest.totalSize) : "--"}</dd></div></dl>{manifest ? <div className="version-file-list">{manifest.files.map((file) => <div key={file.path}><span>{file.path}</span><small>{size(file.size)} · {file.hash.slice(0, 10)}</small></div>)}</div> : <p className="version-legacy-copy">此历史版本会从原始 Demo 工件打包下载；下次恢复后将生成完整资产快照。</p>}</article></section>;
+}

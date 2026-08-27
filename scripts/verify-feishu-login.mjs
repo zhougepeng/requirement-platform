@@ -56,6 +56,7 @@ const server = spawn(process.execPath, ["server.js"], {
     HOSTNAME: "127.0.0.1",
     PORT: String(port),
     AUTH_MODE: "feishu",
+    AUTH_COOKIE_SECURE: "false",
     AUTH_SESSION_SECRET: sessionSecret,
     FEISHU_APP_ID: "cli_test_qr_login",
     FEISHU_APP_SECRET: "test-secret",
@@ -89,6 +90,7 @@ try {
   expect(new URL(qrBody.data?.goto).host === "passport.feishu.cn", "二维码未使用飞书授权地址。");
   const oauthCookie = cookieValue(qr, "requirement_platform_oauth_state");
   expect(oauthCookie, "二维码授权缺少 state Cookie。");
+  expect(!/(?:^|;\s*)Secure(?:;|$)/i.test(qr.headers.get("set-cookie") || ""), "HTTP IP 临时模式仍错误设置了 Secure Cookie。");
   expect(readOAuthState(oauthCookie).returnTo === "/", "外部 returnTo 未被拒绝。");
 
   const invalidState = await request("/auth/callback?code=unused&state=tampered", {

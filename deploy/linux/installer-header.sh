@@ -33,7 +33,7 @@ temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
 tail -n "+$archive_line" "$0" | tar -xzf - -C "$temporary_root"
 payload="$temporary_root/payload"
-if [[ ! -f "$payload/.next/standalone/server.js" || ! -d "$payload/.next/standalone/.next/static" || ! -d "$payload/.next/standalone/public" || ! -f "$payload/VERSION" || ! -f "$payload/requirement-platform-updater" ]]; then
+if [[ ! -f "$payload/.next/standalone/server.js" || ! -d "$payload/.next/standalone/.next/static" || ! -d "$payload/.next/standalone/public" || ! -f "$payload/VERSION" || ! -f "$payload/requirement-platform-updater" || ! -f "$payload/requirement-platform-backup" || ! -f "$payload/requirement-platform-backup.service.template" || ! -f "$payload/requirement-platform-backup.timer.template" ]]; then
   echo "Installer payload is incomplete." >&2
   exit 1
 fi
@@ -41,7 +41,7 @@ fi
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --create-home --home-dir "$PLATFORM_ROOT" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
-install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$PLATFORM_ROOT" "$PLATFORM_ROOT/releases" "$PLATFORM_ROOT/data"
+install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$PLATFORM_ROOT" "$PLATFORM_ROOT/releases" "$PLATFORM_ROOT/data" "$PLATFORM_ROOT/backups"
 
 environment_file="$PLATFORM_ROOT/.env.local"
 if [[ ! -f "$environment_file" ]]; then
@@ -65,15 +65,18 @@ cp -a "$payload/." "$release_dir/"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$release_dir"
 
 install -m 750 -o root -g root "$release_dir/requirement-platform-updater" /usr/local/sbin/requirement-platform-updater
+install -m 755 -o root -g root "$release_dir/requirement-platform-backup" /usr/local/sbin/requirement-platform-backup
 printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/requirement-platform-updater --start\n' "$SERVICE_USER" > /etc/sudoers.d/requirement-platform-updater
 chmod 440 /etc/sudoers.d/requirement-platform-updater
 visudo -cf /etc/sudoers.d/requirement-platform-updater >/dev/null
 
 sed "s|__PLATFORM_ROOT__|$PLATFORM_ROOT|g" "$release_dir/requirement-platform.service.template" > "/etc/systemd/system/$SERVICE_NAME.service"
+sed -e "s|__PLATFORM_ROOT__|$PLATFORM_ROOT|g" -e "s|__SERVICE_NAME__|$SERVICE_NAME|g" "$release_dir/requirement-platform-backup.service.template" > "/etc/systemd/system/$SERVICE_NAME-backup.service"
+sed -e "s|__PLATFORM_ROOT__|$PLATFORM_ROOT|g" -e "s|__SERVICE_NAME__|$SERVICE_NAME|g" "$release_dir/requirement-platform-backup.timer.template" > "/etc/systemd/system/$SERVICE_NAME-backup.timer"
 systemctl daemon-reload
 ln -s "$release_dir" "$current_link.next"
 mv -Tf "$current_link.next" "$current_link"
-if ! systemctl enable "$SERVICE_NAME" || ! systemctl restart "$SERVICE_NAME"; then
+if ! systemctl enable "$SERVICE_NAME" || ! systemctl enable --now "$SERVICE_NAME-backup.timer" || ! systemctl restart "$SERVICE_NAME"; then
   if [[ -n "$previous_release" ]]; then
     ln -s "$previous_release" "$current_link.next"
     mv -Tf "$current_link.next" "$current_link"
@@ -84,7 +87,7 @@ if ! systemctl enable "$SERVICE_NAME" || ! systemctl restart "$SERVICE_NAME"; th
 fi
 
 for _ in {1..10}; do
-  if curl --fail --silent --show-error --max-time 3 http://127.0.0.1:3000/ >/dev/null && find "$release_dir/.next/standalone/.next/static" -type f -name '*.js' -print -quit | grep -q .; then
+  if curl --fail --silent --show-error --max-time 3 http://127.0.0.1:3000/api/health >/dev/null && find "$release_dir/.next/standalone/.next/static" -type f -name '*.js' -print -quit | grep -q .; then
     echo "Requirement Platform $release_id installed successfully."
     exit 0
   fi

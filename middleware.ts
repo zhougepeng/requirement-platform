@@ -27,7 +27,7 @@ async function hasValidSession(value: string | undefined) {
 export async function middleware(request: NextRequest) {
   if (process.env.AUTH_MODE !== "feishu") return NextResponse.next();
   const path = request.nextUrl.pathname;
-  if (path === "/login" || path.startsWith("/auth/") || path.startsWith("/api/auth/") || path === "/mcp") return NextResponse.next();
+  if (path === "/login" || path.startsWith("/auth/") || path.startsWith("/api/auth/") || path === "/api/health" || path === "/mcp") return NextResponse.next();
   if (await hasValidSession(request.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();
   if (path.startsWith("/api/")) return NextResponse.json({ error: "请先使用飞书登录。" }, { status: 401 });
   const loginUrl = new URL("/login", request.url);

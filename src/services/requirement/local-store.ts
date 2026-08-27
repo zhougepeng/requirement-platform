@@ -1,11 +1,11 @@
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, Project, RequirementComment, RequirementDetail, RequirementStore, RequirementVersion } from "@/lib/types";
+import type { DemoArtifact, Project, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementStore, RequirementVersion } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -19,6 +19,9 @@ const PUBLISHED_DEMO_DIR = process.env.REQUIREMENT_PLATFORM_PUBLISHED_DEMO_DIR
 const MAX_ARTIFACT_BYTES = 15 * 1024 * 1024;
 const MAX_UNPACKED_BYTES = 30 * 1024 * 1024;
 const MAX_ARTIFACT_FILES = 150;
+const ASSET_OBJECT_DIR = path.join(DATA_DIR, "asset-objects");
+const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
+const MAX_SNAPSHOT_FILES = 500;
 
 let mutationQueue = Promise.resolve();
 
@@ -29,6 +32,15 @@ export type PublishRequirementInput = {
   prdMarkdown: string;
   artifactId: string;
   changeSummary: string;
+  actor?: { id: string; name: string };
+};
+
+export type PublishRequirementSnapshotInput = {
+  requirementCode: string;
+  archive: File;
+  changeSummary: string;
+  versionName?: string;
+  setCurrent?: boolean;
   actor?: { id: string; name: string };
 };
 
@@ -69,6 +81,73 @@ function safeSegment(value: string, label: string) {
 
 function digest(data: Buffer) {
   return createHash("sha256").update(data).digest("hex");
+}
+
+function safeAssetPath(value: string) {
+  const normalized = path.posix.normalize(value.replaceAll("\\", "/")).replace(/^\/+/, "");
+  if (!normalized || normalized === "." || normalized.startsWith("../") || normalized.includes("/../") || path.posix.isAbsolute(normalized)) throw new Error("需求资产包含非法路径。");
+  return normalized;
+}
+
+function mimeType(filePath: string) {
+  const extension = path.posix.extname(filePath).toLowerCase();
+  return ({ ".md": "text/markdown", ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml", ".woff": "font/woff", ".woff2": "font/woff2" }[extension] ?? "application/octet-stream");
+}
+
+async function storeAssetObject(buffer: Buffer) {
+  const hash = digest(buffer);
+  const target = path.join(ASSET_OBJECT_DIR, hash);
+  try { await stat(target); } catch {
+    await mkdir(ASSET_OBJECT_DIR, { recursive: true });
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    await writeFile(temporary, buffer);
+    try { await rename(temporary, target); } catch { /* identical object won another concurrent write */ }
+  }
+  return hash;
+}
+
+async function snapshotFromEntries(entries: Array<{ path: string; data: Buffer }>) {
+  if (!entries.length || entries.length > MAX_SNAPSHOT_FILES) throw new Error("需求资产文件数量不合法。");
+  let totalSize = 0;
+  const seen = new Set<string>();
+  const files: RequirementAssetFile[] = [];
+  for (const entry of entries) {
+    const assetPath = safeAssetPath(entry.path);
+    if (seen.has(assetPath)) throw new Error(`需求资产存在重复路径：${assetPath}`);
+    seen.add(assetPath);
+    totalSize += entry.data.length;
+    if (totalSize > MAX_SNAPSHOT_BYTES) throw new Error("需求资产解压后不能超过 50MB。");
+    files.push({ path: assetPath, size: entry.data.length, hash: await storeAssetObject(entry.data), mimeType: mimeType(assetPath) });
+  }
+  return { files: files.toSorted((left, right) => left.path.localeCompare(right.path)), totalFiles: files.length, totalSize, createdAt: now() } satisfies RequirementAssetManifest;
+}
+
+async function materializeSnapshotDemo(manifest: RequirementAssetManifest, projectCode: string, requirementCode: string, versionNo: number) {
+  const demoFiles = manifest.files.filter((file) => file.path.startsWith("demo/"));
+  if (!demoFiles.some((file) => file.path === "demo/index.html")) throw new Error("需求资产必须包含 demo/index.html。");
+  safeSegment(projectCode, "项目编码"); safeSegment(requirementCode, "需求编码");
+  const destination = path.join(PUBLISHED_DEMO_DIR, projectCode, requirementCode, `v${versionNo}`);
+  const temporary = `${destination}.${randomUUID()}.tmp`;
+  for (const file of demoFiles) {
+    const relative = file.path.slice("demo/".length);
+    const target = path.join(temporary, relative);
+    if (!target.startsWith(`${temporary}${path.sep}`)) throw new Error("需求资产包含非法 Demo 路径。");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, await readFile(path.join(ASSET_OBJECT_DIR, file.hash)));
+  }
+  await mkdir(path.dirname(destination), { recursive: true });
+  await rename(temporary, destination);
+  return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/index.html`;
+}
+
+async function parseSnapshotArchive(file: File) {
+  if (!file.name.toLowerCase().endsWith(".zip")) throw new Error("需求资产必须上传 ZIP 文件。");
+  if (file.size <= 0 || file.size > MAX_SNAPSHOT_BYTES) throw new Error("需求资产 ZIP 必须大于 0 且不超过 50MB。");
+  const archive = new AdmZip(Buffer.from(await file.arrayBuffer()));
+  const entries = archive.getEntries().filter((entry) => !entry.isDirectory).map((entry) => ({ path: safeAssetPath(entry.entryName), data: entry.getData() }));
+  if (!entries.some((entry) => entry.path === "PRD.md")) throw new Error("需求资产 ZIP 根目录必须包含 PRD.md。");
+  if (!entries.some((entry) => entry.path === "demo/index.html")) throw new Error("需求资产 ZIP 必须包含 demo/index.html。");
+  return entries;
 }
 
 async function writeStore(store: RequirementStore) {
@@ -470,6 +549,86 @@ export async function publishRequirement(input: PublishRequirementInput) {
       summary.updatedAt = requirement.updatedAt;
       summary.owner = requirement.owner ?? version.publisher;
     }
+    project.updatedAt = version.publishedAt.slice(0, 10);
+    return clone({ requirement, version, url: `/r/${requirementCode}` });
+  });
+}
+
+async function legacyManifest(store: RequirementStore, version: RequirementVersion) {
+  if (version.assetManifest) return version.assetManifest;
+  const artifact = store.artifacts.find((item) => item.id === version.artifactId);
+  if (!artifact) throw new Error("历史版本缺少可恢复的 Demo 工件。");
+  const root = path.join(ARTIFACT_DIR, artifact.id);
+  const entries: Array<{ path: string; data: Buffer }> = [{ path: "PRD.md", data: Buffer.from(version.prd, "utf8") }];
+  async function visit(folder: string, relative = "") : Promise<void> {
+    for (const entry of await readdir(folder, { withFileTypes: true })) {
+      const nextRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const source = path.join(folder, entry.name);
+      if (entry.isDirectory()) await visit(source, nextRelative);
+      else if (entry.isFile()) entries.push({ path: `demo/${safeAssetPath(nextRelative)}`, data: await readFile(source) });
+    }
+  }
+  await visit(root);
+  return snapshotFromEntries(entries);
+}
+
+export async function publishRequirementSnapshot(input: PublishRequirementSnapshotInput) {
+  const requirementCode = input.requirementCode.trim();
+  const changeSummary = input.changeSummary.trim();
+  safeSegment(requirementCode, "需求编码");
+  if (!changeSummary || changeSummary.length > 1000) throw new Error("版本说明不能为空且不能超过 1000 字。");
+  const entries = await parseSnapshotArchive(input.archive);
+  const manifest = await snapshotFromEntries(entries);
+  const prd = entries.find((entry) => entry.path === "PRD.md")?.data.toString("utf8").trim();
+  if (!prd) throw new Error("PRD.md 不能为空。");
+  return mutate(async (store) => {
+    const requirement = store.requirements.find((item) => item.code === requirementCode);
+    if (!requirement) throw new Error("需求不存在。");
+    const project = store.projects.find((item) => item.id === requirement.projectId);
+    if (!project) throw new Error("需求所属项目不存在。");
+    const number = store.versions.filter((item) => item.requirementCode === requirementCode).reduce((max, item) => Math.max(max, item.number), 0) + 1;
+    const demoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);
+    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: input.actor?.name || "本地开发身份", changeSummary, prd, demoEntryUrl, artifactId: `snapshot_${randomUUID().replaceAll("-", "")}`, versionName: input.versionName?.trim().slice(0, 80) || undefined, assetManifest: manifest };
+    store.versions.push(version);
+    if (input.setCurrent !== false) {
+      requirement.currentVersionId = version.id;
+      requirement.updatedAt = version.publishedAt;
+      requirement.title = requirement.title;
+      const summary = project.requirements.find((item) => item.code === requirementCode);
+      if (summary) { summary.latestVersion = number; summary.updatedAt = version.publishedAt; summary.owner = requirement.owner ?? version.publisher; }
+      project.updatedAt = version.publishedAt.slice(0, 10);
+    }
+    return clone({ requirement, version, url: `/r/${requirementCode}` });
+  });
+}
+
+export async function downloadRequirementVersion(requirementCode: string, versionNo: number) {
+  const store = await ensureStore();
+  const version = store.versions.find((item) => item.requirementCode === requirementCode && item.number === versionNo);
+  if (!version) throw new Error("版本不存在。");
+  const manifest = await legacyManifest(store, version);
+  const archive = new AdmZip();
+  for (const file of manifest.files) archive.addFile(file.path, await readFile(path.join(ASSET_OBJECT_DIR, file.hash)));
+  archive.addFile("requirement.json", Buffer.from(JSON.stringify({ requirementCode, version: `v${version.number}`, createdAt: version.publishedAt, files: manifest.files }, null, 2), "utf8"));
+  return { name: `${requirementCode}-v${version.number}.zip`, body: archive.toBuffer(), manifest };
+}
+
+export async function restoreRequirementVersion(requirementCode: string, sourceVersionNo: number, actor?: { id: string; name: string }) {
+  return mutate(async (store) => {
+    const requirement = store.requirements.find((item) => item.code === requirementCode);
+    const source = store.versions.find((item) => item.requirementCode === requirementCode && item.number === sourceVersionNo);
+    if (!requirement || !source) throw new Error("需求或历史版本不存在。");
+    const project = store.projects.find((item) => item.id === requirement.projectId);
+    if (!project) throw new Error("需求所属项目不存在。");
+    const manifest = await legacyManifest(store, source);
+    const number = store.versions.filter((item) => item.requirementCode === requirementCode).reduce((max, item) => Math.max(max, item.number), 0) + 1;
+    const demoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);
+    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: actor?.name || "本地开发身份", changeSummary: `从 V${sourceVersionNo} 恢复`, prd: source.prd, demoEntryUrl, artifactId: `restore_${source.id}`, sourceVersionNo, assetManifest: manifest };
+    store.versions.push(version);
+    requirement.currentVersionId = version.id;
+    requirement.updatedAt = version.publishedAt;
+    const summary = project.requirements.find((item) => item.code === requirementCode);
+    if (summary) { summary.latestVersion = number; summary.updatedAt = version.publishedAt; summary.owner = requirement.owner ?? version.publisher; }
     project.updatedAt = version.publishedAt.slice(0, 10);
     return clone({ requirement, version, url: `/r/${requirementCode}` });
   });

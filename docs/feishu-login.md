@@ -33,6 +33,17 @@ FEISHU_ALLOWED_TENANT_KEY=你的企业tenant_key
 
 飞书回调地址需要能被飞书访问。`localhost` 通常不能直接用于实际扫码回调；本地调试应使用临时 HTTPS 隧道域名，并把 `FEISHU_REDIRECT_URI` 同时更新为该域名的 `/auth/callback`。开发环境若不准备调试飞书登录，可以保留 `AUTH_MODE=local`。
 
+临时没有域名时，也可以在飞书应用的安全设置登记 `http://公网IP:3000/auth/callback`，并在服务器设置：
+
+```ini
+AUTH_MODE=feishu
+APP_BASE_URL=http://公网IP:3000
+FEISHU_REDIRECT_URI=http://公网IP:3000/auth/callback
+AUTH_COOKIE_SECURE=false
+```
+
+`AUTH_COOKIE_SECURE=false` 仅用于 HTTP IP 的短期调试，否则浏览器不会保存带 Secure 标记的登录 Cookie。该方式的网络传输没有 HTTPS 保护，拿到域名后应改为 `https://域名/auth/callback` 并删除此配置。
+
 ## 4. 登录流程与安全边界
 
 1. 未登录访问页面会被统一跳转到 `/login`；接口返回 401。

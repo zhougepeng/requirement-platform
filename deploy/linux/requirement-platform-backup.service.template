@@ -1,0 +1,13 @@
+[Unit]
+Description=Requirement Platform daily data backup
+After=network.target requirement-platform.service
+
+[Service]
+Type=oneshot
+User=requirement-platform
+EnvironmentFile=__PLATFORM_ROOT__/.env.local
+Environment=REQUIREMENT_PLATFORM_INSTALL_DIR=__PLATFORM_ROOT__
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ExecStart=/usr/local/sbin/requirement-platform-backup

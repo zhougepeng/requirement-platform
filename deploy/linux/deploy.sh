@@ -50,7 +50,7 @@ if ! sudo systemctl restart "$SERVICE_NAME"; then
 fi
 
 for _ in {1..10}; do
-  if curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/" >/dev/null && find "$NEXT_RELEASE/.next/standalone/.next/static" -type f -name '*.js' -print -quit | grep -q .; then
+  if curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/api/health" >/dev/null && find "$NEXT_RELEASE/.next/standalone/.next/static" -type f -name '*.js' -print -quit | grep -q .; then
     echo "Requirement platform deployed and healthy on port ${PORT}."
     exit 0
   fi
