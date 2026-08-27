@@ -12,6 +12,11 @@ type Department = { open_department_id?: string; department_id?: string; name?: 
 type User = { open_id?: string; user_id?: string; name?: string; avatar?: { avatar_origin?: string; avatar_72?: string }; avatar_url?: string; tenant_key?: string; status?: { is_active?: boolean }; active?: boolean };
 
 export type FeishuEmployee = { openId: string; name: string; avatarUrl?: string; tenantKey?: string; departmentNames: string[]; directoryActive: boolean };
+export type FeishuDirectorySnapshot = {
+  employees: FeishuEmployee[];
+  /** 部门数包含根节点，用于在管理界面解释本次同步的可见范围。 */
+  departmentCount: number;
+};
 
 async function fetchPage<T>(url: URL, token: string) {
   const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: AbortSignal.timeout(20_000) });
@@ -87,5 +92,8 @@ export async function fetchFeishuEmployees() {
       });
     }
   }
-  return Array.from(usersById.values());
+  return {
+    employees: Array.from(usersById.values()),
+    departmentCount: departments.length,
+  } satisfies FeishuDirectorySnapshot;
 }

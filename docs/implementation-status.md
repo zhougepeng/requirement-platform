@@ -6,8 +6,8 @@
 - 读者登录后查看项目、PRD、Demo、版本和版本评论；Demo 在 iframe 沙箱中预览。
 - 产品经理通过网页 API 上传 Demo ZIP 并发布新版本；历史版本与 Demo 目录不可覆盖。
 - MCP `/mcp` 使用独立 `MCP_API_TOKEN`，可查询、评论和发布，适合受控自动化发布。
-- 外网模式设为 `AUTH_MODE=feishu` 后，所有网页与 API 都需要飞书登录；员工是否可使用由本机员工目录控制，只有 `FEISHU_PUBLISHER_OPEN_IDS` 白名单中的启用员工可上传和发布。
-- 管理员可通过“员工与权限”同步飞书组织架构、启用/停用员工和设置管理员；飞书首次登录默认普通成员，`FEISHU_ADMIN_OPEN_IDS` 用于明确指定启动管理员。
+- 外网模式设为 `AUTH_MODE=feishu` 后，所有网页与 API 都需要飞书登录；员工角色由本机员工目录控制，查看、发布、管理三档角色分别控制只读、发布和后台管理能力。
+- 管理员可通过“员工权限”同步飞书组织架构并设置角色；新同步员工默认未授权，飞书首次登录也不会自动获得权限，`FEISHU_ADMIN_OPEN_IDS` 用于明确指定启动管理员。
 - AI 助手为可选能力，只读取当前版本的 PRD；未配置模型时明确返回“尚未配置”。
 
 ## 不再作为默认依赖
@@ -30,7 +30,7 @@ PostgreSQL、Redis、MinIO、Outline、Keycloak 和 Docker 全栈编排已停用
 ## 外网部署前的必要配置
 
 1. 准备 HTTPS 域名，并把 `<域名>/auth/callback` 配入飞书网页应用的重定向地址。
-2. 服务器 `.env.local` 设置 `AUTH_MODE=feishu`、飞书 App ID/Secret、会话密钥、租户白名单、产品经理 Open ID 白名单和 MCP 令牌；`FEISHU_ADMIN_OPEN_IDS` 可选，仅用于指定启动管理员。
+2. 服务器 `.env.local` 设置 `AUTH_MODE=feishu`、飞书 App ID/Secret、会话密钥、租户白名单和 MCP 令牌；`FEISHU_ADMIN_OPEN_IDS` 可选，仅用于指定启动管理员。员工的查看/发布/管理角色在页面内设置，不再依赖发布名单。
 3. 将数据目录放在代码目录之外，并纳入每日备份；同一时间只运行一个平台进程。
 4. 通过 IIS 或 Caddy 将 HTTPS 流量反向代理到本机 `127.0.0.1` 服务。
 

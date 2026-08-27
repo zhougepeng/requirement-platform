@@ -135,6 +135,7 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 .employee-manager-dialog header p { margin:4px 0 0; color:#98a2b3; font-size:12px; line-height:1.45; }
 .employee-manager-body { min-height:0; overflow:auto; padding:14px 18px 18px; }
 .employee-manager-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; color:#98a2b3; font-size:12px; }
+.employee-sync-notice { margin:0 0 12px; border:1px solid #bfdbfe; border-radius:6px; padding:8px 10px; color:#175cd3; background:#eff6ff; font-size:12px; line-height:1.5; }
 .employee-list { display:grid; gap:7px; }
 .employee-row { display:flex; align-items:center; justify-content:space-between; gap:14px; border:1px solid #e4e7ec; border-radius:6px; padding:10px 12px; }
 .employee-row>div:first-child { display:grid; min-width:0; gap:3px; }
@@ -143,6 +144,8 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 .employee-actions { display:flex; flex:0 0 auto; align-items:center; gap:12px; color:#667085; font-size:11px; }
 .employee-actions label { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
 .employee-actions input { width:14px; height:14px; accent-color:#175cd3; }
+.employee-role select { min-width:88px; height:30px; border:1px solid #d0d5dd; border-radius:5px; padding:0 26px 0 9px; color:#344054; background:#fff; font-size:12px; }
+.employee-role select:focus { outline:2px solid #84adff; outline-offset:1px; border-color:#175cd3; }
 .model-manager-empty { display:grid; gap:6px; place-items:center; min-height:190px; margin:0; color:#98a2b3; font-size:12px; text-align:center; line-height:1.6; }
 .model-manager-empty b { color:#475467; font-size:13px; }
 .model-manager-empty span { max-width:340px; }

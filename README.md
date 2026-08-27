@@ -28,6 +28,6 @@ npm run start:local
 
 ## 外网服务器
 
-复制 `.env.local.example` 为 `.env.local`，填写飞书登录与发布者白名单；将数据目录设置在代码目录之外。平台本身只监听 `127.0.0.1`，通过 IIS 或 Caddy 提供 HTTPS 域名访问。
+复制 `.env.local.example` 为 `.env.local`，填写飞书登录配置和数据目录。首次部署可用 `FEISHU_ADMIN_OPEN_IDS` 指定至少一名启动管理员；其他员工登录后由管理员在“员工与权限”中选择“查看”“发布”或“管理”。平台不做项目级或需求级权限隔离，拥有“查看”及以上角色即可看到全部项目和需求。平台本身只监听 `127.0.0.1`，通过 IIS 或 Caddy 提供 HTTPS 域名访问。
 
 Windows 与 Linux 均可通过 GitHub Actions 自托管 Runner 自动部署；Windows 使用受控 Node 进程，Linux 使用 systemd。Linux 一键安装包会启用每日数据备份定时器，默认保留 14 天；备份目录仍应同步到对象存储或另一台机器。详见 [当前实施状态](docs/implementation-status.md) 与 [部署说明](deploy/README.md)。

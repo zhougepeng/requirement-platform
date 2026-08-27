@@ -8,7 +8,8 @@
     "start": "next start",
     "start:local": "next start --hostname 127.0.0.1",
     "lint": "eslint",
-    "test:auth": "node scripts/verify-feishu-login.mjs"
+    "test:auth": "node scripts/verify-feishu-login.mjs",
+    "test:permissions": "node scripts/verify-role-permissions.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

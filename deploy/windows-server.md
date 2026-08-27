@@ -17,9 +17,8 @@
    FEISHU_APP_ID=cli_xxx
    FEISHU_APP_SECRET=飞书应用密钥
    FEISHU_ALLOWED_TENANT_KEY=你的租户key
-   # 可选：首次扫码默认普通成员；如需管理员，请明确填写 open_id
+   # 可选：首次部署指定启动管理员；多个 open_id 用英文逗号分隔
    FEISHU_ADMIN_OPEN_IDS=首位管理员的open_id
-   FEISHU_PUBLISHER_OPEN_IDS=产品经理的open_id
    MCP_API_TOKEN=独立且足够长的随机令牌
    REQUIREMENT_PLATFORM_DATA_DIR=D:/RequirementPlatform/data
    REQUIREMENT_PLATFORM_PUBLISHED_DEMO_DIR=D:/RequirementPlatform/data/published-demos
@@ -44,8 +43,10 @@
 ## 验收
 
 1. 未登录打开域名会跳转飞书登录；开发模式页面底部也可随时点击“飞书登录”进入授权。
-2. 首次登录的员工会登记为普通成员；通过 `FEISHU_ADMIN_OPEN_IDS` 指定的账号才会成为启动管理员，之后管理员可在“员工与权限”中设置其他管理员。
-3. 未被管理员启用的员工不能读取项目、需求、Demo 或使用 AI。
-4. 管理员在左侧底部“员工与权限”中同步飞书组织架构，并逐个启用员工或设置管理员。
-5. 普通启用员工能查看 PRD、Demo、评论和使用 AI；只有发布者白名单中的启用员工能上传和发布。
-6. MCP 无令牌返回 401，携带令牌可调用发布工具；MCP 令牌只交给受控自动化服务。
+2. 首次登录的员工默认是“未授权”；通过 `FEISHU_ADMIN_OPEN_IDS` 指定的账号会成为启动管理员，之后管理员可在“员工与权限”中授权其他员工。
+3. 管理员在左侧底部“员工与权限”中同步飞书组织架构，并为员工选择角色：
+   - `查看`：查看全部项目、需求、版本和 Demo，发表评论，使用 AI 助手。
+   - `发布`：包含查看能力，可创建和编辑项目、上传 Demo、发布新需求/版本、恢复版本。
+   - `管理`：包含发布能力，可管理员工权限、模型和系统更新；模板管理归入此角色。
+4. 未授权员工不能读取项目、需求、Demo 或使用 AI。平台不按项目或需求限制可见范围，拥有“查看”及以上角色即可看到全部内容。
+5. MCP 无令牌返回 401，携带令牌可调用发布工具；MCP 令牌只交给受控自动化服务。MCP 发布同样需要平台内的发布权限。

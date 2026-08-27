@@ -10,6 +10,8 @@ const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
   : path.join(process.cwd(), "data", "requirement-platform");
 const EMPLOYEE_FILE = path.join(DATA_DIR, "employees.local.json");
 
+export type EmployeeRole = "none" | "viewer" | "publisher" | "admin";
+
 type StoredEmployee = {
   id: string;
   openId: string;
@@ -19,7 +21,10 @@ type StoredEmployee = {
   avatarUrl?: string;
   tenantKey?: string;
   departmentNames: string[];
+  role: EmployeeRole;
+  /** @deprecated Kept in the file format for older deployments. Use role. */
   enabled: boolean;
+  /** @deprecated Kept in the file format for older deployments. Use role. */
   isAdmin: boolean;
   directoryActive: boolean;
   createdAt: string;
@@ -56,6 +61,17 @@ function isBootstrapPublisher(openId: string) {
   return csv("FEISHU_PUBLISHER_OPEN_IDS").includes(openId);
 }
 
+function roleFromLegacy(item: Partial<StoredEmployee>): EmployeeRole {
+  if (item.role === "admin" || item.role === "publisher" || item.role === "viewer" || item.role === "none") return item.role;
+  if (item.isAdmin === true) return "admin";
+  if (item.enabled === true) return "viewer";
+  return "none";
+}
+
+function legacyFlags(role: EmployeeRole) {
+  return { role, enabled: role !== "none", isAdmin: role === "admin" };
+}
+
 async function readStore(): Promise<EmployeeStore> {
   try {
     const parsed = JSON.parse(await readFile(EMPLOYEE_FILE, "utf8")) as Partial<EmployeeStore>;
@@ -65,8 +81,7 @@ async function readStore(): Promise<EmployeeStore> {
       employees: parsed.employees.filter((item): item is StoredEmployee => Boolean(item?.openId && item.name)).map((item) => ({
         ...item,
         departmentNames: Array.isArray(item.departmentNames) ? item.departmentNames.filter((value): value is string => typeof value === "string") : [],
-        enabled: item.enabled !== false,
-        isAdmin: item.isAdmin === true,
+        ...legacyFlags(roleFromLegacy(item)),
         directoryActive: item.directoryActive !== false,
       })),
     };
@@ -109,7 +124,8 @@ export async function getEmployee(openId: string) {
 
 export async function listEmployees() {
   const store = await readStore();
-  return clone(store.employees.toSorted((left, right) => Number(right.isAdmin) - Number(left.isAdmin) || left.name.localeCompare(right.name, "zh-CN")));
+  const rank: Record<EmployeeRole, number> = { admin: 0, publisher: 1, viewer: 2, none: 3 };
+  return clone(store.employees.toSorted((left, right) => rank[left.role] - rank[right.role] || left.name.localeCompare(right.name, "zh-CN")));
 }
 
 export async function registerLoginEmployee(input: EmployeeLogin) {
@@ -127,11 +143,8 @@ export async function registerLoginEmployee(input: EmployeeLogin) {
         updatedAt: timestamp,
         lastLoginAt: timestamp,
       });
-      if (isBootstrapAdmin(input.openId)) {
-        existing.enabled = true;
-        existing.isAdmin = true;
-      }
-      if (isBootstrapPublisher(input.openId)) existing.enabled = true;
+      if (isBootstrapAdmin(input.openId)) Object.assign(existing, legacyFlags("admin"));
+      else if (isBootstrapPublisher(input.openId) && existing.role === "none") Object.assign(existing, legacyFlags("publisher"));
       return summary(existing);
     }
     const employee: StoredEmployee = {
@@ -143,10 +156,8 @@ export async function registerLoginEmployee(input: EmployeeLogin) {
       avatarUrl: input.avatarUrl,
       tenantKey: input.tenantKey,
       departmentNames: [],
-      // 已在飞书回调中完成指定企业校验，新成员默认可用；管理员后续仍可手动停用。
-      enabled: true,
-      // 默认成员。管理员必须由环境变量显式指定，或由已有管理员在页面中授予。
-      isAdmin: isBootstrapAdmin(input.openId),
+      // 新登录员工默认未授权，由管理员在员工管理中授予角色。
+      ...legacyFlags(isBootstrapAdmin(input.openId) ? "admin" : isBootstrapPublisher(input.openId) ? "publisher" : "none"),
       directoryActive: true,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -165,8 +176,8 @@ export async function syncEmployees(items: FeishuEmployee[]) {
       const existing = byOpenId.get(item.openId);
       if (existing) {
         Object.assign(existing, { name: item.name, avatarUrl: item.avatarUrl, tenantKey: item.tenantKey, departmentNames: item.departmentNames, directoryActive: item.directoryActive, updatedAt: timestamp });
-        if (isBootstrapAdmin(item.openId)) { existing.enabled = true; existing.isAdmin = true; }
-        if (isBootstrapPublisher(item.openId)) existing.enabled = true;
+        if (isBootstrapAdmin(item.openId)) Object.assign(existing, legacyFlags("admin"));
+        else if (isBootstrapPublisher(item.openId) && existing.role === "none") Object.assign(existing, legacyFlags("publisher"));
       } else {
         const employee: StoredEmployee = {
           id: `employee_${randomUUID().replaceAll("-", "")}`,
@@ -175,8 +186,7 @@ export async function syncEmployees(items: FeishuEmployee[]) {
           avatarUrl: item.avatarUrl,
           tenantKey: item.tenantKey,
           departmentNames: item.departmentNames,
-          enabled: isBootstrapAdmin(item.openId) || isBootstrapPublisher(item.openId),
-          isAdmin: isBootstrapAdmin(item.openId),
+          ...legacyFlags(isBootstrapAdmin(item.openId) ? "admin" : isBootstrapPublisher(item.openId) ? "publisher" : "none"),
           directoryActive: item.directoryActive,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -188,31 +198,36 @@ export async function syncEmployees(items: FeishuEmployee[]) {
   });
 }
 
-export async function updateEmployee(openId: string, input: { enabled?: boolean; isAdmin?: boolean }) {
+export async function updateEmployee(openId: string, input: { role: EmployeeRole }) {
   return mutate((store) => {
     const target = store.employees.find((item) => item.openId === openId);
     if (!target) throw new Error("员工不存在，请先同步飞书组织架构。");
-    if (input.isAdmin === false && target.isAdmin && !store.employees.some((item) => item.openId !== target.openId && item.isAdmin && item.enabled)) {
-      throw new Error("至少保留一名启用中的管理员。");
+    if (target.role === "admin" && input.role !== "admin" && !store.employees.some((item) => item.openId !== target.openId && item.role === "admin" && item.directoryActive)) {
+      throw new Error("至少保留一名有效管理员。");
     }
-    if (input.enabled === false && target.isAdmin && !store.employees.some((item) => item.openId !== target.openId && item.isAdmin && item.enabled)) {
-      throw new Error("不能停用最后一名管理员。");
-    }
-    if (input.enabled !== undefined) target.enabled = input.enabled;
-    if (input.isAdmin !== undefined) target.isAdmin = input.isAdmin;
+    Object.assign(target, legacyFlags(input.role));
     target.updatedAt = now();
     return summary(target);
   });
 }
 
-export async function requireEnabledEmployee(openId: string) {
+export async function requireViewerEmployee(openId: string) {
   const employee = await getEmployee(openId);
-  if (!employee || !employee.enabled || !employee.directoryActive) throw new Error("当前飞书账号尚未获准使用需求平台，请联系管理员开通。" );
+  if (!employee || employee.role === "none" || !employee.directoryActive) throw new Error("当前飞书账号尚未获准使用需求平台，请联系管理员开通。" );
+  return employee;
+}
+
+/** @deprecated Use requireViewerEmployee. */
+export const requireEnabledEmployee = requireViewerEmployee;
+
+export async function requirePublisherEmployee(openId: string) {
+  const employee = await requireViewerEmployee(openId);
+  if (employee.role !== "publisher" && employee.role !== "admin") throw new Error("当前账号没有发布权限。" );
   return employee;
 }
 
 export async function requireAdminEmployee(openId: string) {
-  const employee = await requireEnabledEmployee(openId);
-  if (!employee.isAdmin) throw new Error("当前账号没有管理员权限。" );
+  const employee = await requireViewerEmployee(openId);
+  if (employee.role !== "admin") throw new Error("当前账号没有管理员权限。" );
   return employee;
 }
