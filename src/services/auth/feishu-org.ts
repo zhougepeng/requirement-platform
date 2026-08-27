@@ -37,7 +37,7 @@ async function fetchContactScopeRoots(token: string) {
     if (!id) return [];
     // 飞书根节点 0 及部分旧租户会返回普通 department_id；不能把它当作 open_department_id。
     const idType: DepartmentIdType =
-      department.department_id_type === "department_id" || (!department.open_department_id && Boolean(department.department_id))
+      department.department_id_type === "department_id" || id === "0" || (!department.open_department_id && Boolean(department.department_id))
         ? "department_id"
         : "open_department_id";
     return [{ id, idType, name: department.name || "已授权部门" }];
@@ -54,7 +54,9 @@ async function listDirectChildren(token: string, departmentId: string, departmen
     if (pageToken) url.searchParams.set("page_token", pageToken);
     const page = await fetchPage<Department>(url, token);
     for (const item of page.items ?? []) {
-      const id = item.open_department_id ?? item.department_id;
+      const id = departmentIdType === "department_id"
+        ? item.department_id ?? item.open_department_id
+        : item.open_department_id ?? item.department_id;
       if (!id || !item.name) continue;
       result.push({ id, name: item.name });
       if (result.length >= MAX_ITEMS) throw new Error("飞书组织架构超过 10000 个部门，已停止同步。");
@@ -93,7 +95,7 @@ export async function fetchFeishuEmployees() {
   for (let index = 0; index < departments.length; index += 1) {
     const parent = departments[index];
     for (const child of await listDirectChildren(token, parent.id, parent.idType)) {
-      departments.push({ ...child, idType: "open_department_id", path: [...parent.path, child.name] });
+      departments.push({ ...child, idType: parent.idType, path: [...parent.path, child.name] });
     }
     if (departments.length > MAX_ITEMS) throw new Error("飞书组织架构超过 10000 个部门，已停止同步。");
   }
