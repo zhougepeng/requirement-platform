@@ -6,6 +6,7 @@ import path from "node:path";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = 3312;
 const baseUrl = `http://127.0.0.1:${port}`;
+const publicOrigin = "http://203.0.113.10:3000";
 const sessionSecret = randomBytes(32).toString("base64url");
 
 function expect(condition, message) {
@@ -57,6 +58,7 @@ const server = spawn(process.execPath, ["server.js"], {
     PORT: String(port),
     AUTH_MODE: "feishu",
     AUTH_COOKIE_SECURE: "false",
+    APP_BASE_URL: publicOrigin,
     AUTH_SESSION_SECRET: sessionSecret,
     FEISHU_APP_ID: "cli_test_qr_login",
     FEISHU_APP_SECRET: "test-secret",
@@ -78,6 +80,7 @@ try {
 
   const home = await request("/?from=auth-test");
   expect(home.status === 307, "未登录首页未跳转登录页。");
+  expect(new URL(home.headers.get("location"), baseUrl).origin === publicOrigin, "未登录跳转错误使用了服务器监听地址。");
   expect(locationPath(home) === "/login?returnTo=%2F%3Ffrom%3Dauth-test", "首页 returnTo 不正确。");
 
   const deepLink = await request("/r/ERP-001?version=3");
@@ -97,6 +100,7 @@ try {
     headers: { Cookie: `requirement_platform_oauth_state=${oauthCookie}` },
   });
   expect(invalidState.status === 307 && locationPath(invalidState) === "/login?error=state", "篡改 state 未被拒绝。");
+  expect(new URL(invalidState.headers.get("location"), baseUrl).origin === publicOrigin, "OAuth 失败跳转错误使用了服务器监听地址。");
   expect(!cookieValue(invalidState, "requirement_platform_session"), "篡改 state 意外创建了 Session。");
 
   const logout = await request("/auth/logout");

@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { publicAppUrl } from "@/lib/public-app-url";
 
 const SESSION_COOKIE = "requirement_platform_session";
 
@@ -30,7 +31,7 @@ export async function middleware(request: NextRequest) {
   if (path === "/login" || path.startsWith("/auth/") || path.startsWith("/api/auth/") || path === "/api/health" || path === "/mcp") return NextResponse.next();
   if (await hasValidSession(request.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();
   if (path.startsWith("/api/")) return NextResponse.json({ error: "请先使用飞书登录。" }, { status: 401 });
-  const loginUrl = new URL("/login", request.url);
+  const loginUrl = publicAppUrl("/login", request.url);
   loginUrl.searchParams.set("returnTo", `${path}${request.nextUrl.search}`);
   return NextResponse.redirect(loginUrl);
 }
