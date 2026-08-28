@@ -68,6 +68,9 @@ export type RequirementSummary = {
   owner?: string;
   archivedAt?: string;
   archivedBy?: string;
+  status?: "offline" | "online";
+  releaseVersion?: string;
+  releaseDate?: string;
 };
 
 export type Project = {
@@ -93,6 +96,9 @@ export type Requirement = {
   owner?: string;
   archivedAt?: string;
   archivedBy?: string;
+  status?: "offline" | "online";
+  releaseVersion?: string;
+  releaseDate?: string;
 };
 
 export type DemoArtifact = {

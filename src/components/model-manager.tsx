@@ -31,7 +31,9 @@ export function ModelManager({ initialOpen = false, hideTrigger = false, onClose
   const [form, setForm] = useState<ModelForm>(emptyForm);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     if (!initialOpen) return;
@@ -47,6 +49,21 @@ export function ModelManager({ initialOpen = false, hideTrigger = false, onClose
       setError(reason instanceof Error ? reason.message : "无法读取模型配置。");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function testConnection() {
+    if (testing || !models.length) return;
+    setTesting(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await request<{ model: string; host: string; elapsedMs: number }>("/api/v1/models/test", { method: "POST" });
+      setNotice(`默认模型连接正常：${result.model} · ${result.host} · ${result.elapsedMs}ms`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "模型连接检测失败。");
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -120,8 +137,9 @@ export function ModelManager({ initialOpen = false, hideTrigger = false, onClose
     {open ? <div className="model-manager-layer" role="presentation"><button className="model-manager-backdrop" aria-label="关闭模型管理" onClick={close} /><section className="model-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="model-manager-title">
       <header><div><h2 id="model-manager-title">模型管理</h2><p>管理需求库 AI 助手使用的模型配置。</p></div><button className="model-manager-close" onClick={close} aria-label="关闭模型管理"><Icon name="close" /></button></header>
       <div className="model-manager-body">
-        <div className="model-manager-toolbar"><span>{models.length ? `已配置 ${models.length} 个模型` : "尚未添加模型"}</span><button className="model-manager-add" onClick={beginCreate}><Icon name="plus" />新增模型</button></div>
+        <div className="model-manager-toolbar"><span>{models.length ? `已配置 ${models.length} 个模型` : "尚未添加模型"}</span><div><button className="project-dialog-cancel" onClick={() => void testConnection()} disabled={!models.length || testing}>{testing ? "检测中…" : "测试默认模型"}</button><button className="model-manager-add" onClick={beginCreate}><Icon name="plus" />新增模型</button></div></div>
         {error && <p className="model-manager-error">{error}</p>}
+        {notice && <p className="model-manager-success">{notice}</p>}
         {loading ? <p className="model-manager-empty">正在读取模型配置…</p> : models.length ? <div className="model-manager-list">{models.map((item) => <article className="model-card" key={item.id}><div className="model-card-main"><div><b>{item.name}</b>{item.isDefault ? <span className="model-default">默认</span> : null}</div><code>{item.model}</code><small title={item.baseUrl}>{item.baseUrl}</small></div><div className="model-card-state"><span>{item.hasApiKey ? "密钥已配置" : "未配置密钥"}</span><div><button onClick={() => beginEdit(item)}>编辑</button>{!item.isDefault ? <button onClick={() => void makeDefault(item.id)}>设为默认</button> : null}<button className="model-delete" onClick={() => void remove(item)} title="删除模型"><Icon name="trash" /></button></div></div></article>)}</div> : <div className="model-manager-empty"><b>还没有模型配置</b><span>新增一个兼容 OpenAI Chat Completions 的模型后，需求库助手即可回答命中的需求内容。</span></div>}
       </div>
       {formOpen ? <div className="model-form-layer"><button className="model-form-backdrop" aria-label="取消模型编辑" onClick={() => setFormOpen(false)} /><form className="model-form" onSubmit={(event) => void save(event)}><header><div><h3>{editing ? "编辑模型" : "新增模型"}</h3><p>密钥只保存在本机，不会在此页面回显。</p></div><button type="button" className="model-manager-close" onClick={() => setFormOpen(false)} aria-label="关闭模型编辑"><Icon name="close" /></button></header><label>配置名称<input value={form.name} onChange={(event) => setForm((value) => ({ ...value, name: event.target.value }))} required maxLength={80} placeholder="例如：团队模型服务" /></label><label>服务地址<input value={form.baseUrl} onChange={(event) => setForm((value) => ({ ...value, baseUrl: event.target.value }))} required type="url" placeholder="https://api.example.com/v1" /></label><label>模型 ID<input value={form.model} onChange={(event) => setForm((value) => ({ ...value, model: event.target.value }))} required maxLength={160} placeholder="例如：gpt-4.1-mini" /></label><label>API Key<input value={form.apiKey} onChange={(event) => setForm((value) => ({ ...value, apiKey: event.target.value }))} required={!editing} type="password" maxLength={2000} placeholder={editing ? "留空则保留当前密钥" : "输入 API Key"} /></label><label className="model-default-check"><input checked={form.isDefault} onChange={(event) => setForm((value) => ({ ...value, isDefault: event.target.checked }))} type="checkbox" />设为 AI 助手默认模型</label><footer><button type="button" className="model-cancel" onClick={() => setFormOpen(false)}>取消</button><button className="model-save" disabled={saving}>{saving ? "保存中…" : "保存模型"}</button></footer></form></div> : null}

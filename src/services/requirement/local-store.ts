@@ -57,6 +57,20 @@ export type UpdateProjectInput = {
   owner?: string;
 };
 
+export type RequirementReleaseStatus = "offline" | "online";
+export type UpdateRequirementReleaseStatusInput = {
+  status: RequirementReleaseStatus;
+  releaseVersion?: string;
+  releaseDate?: string;
+};
+
+export function releaseStatusOf(requirement: Pick<import("@/lib/types").Requirement, "status">): RequirementReleaseStatus {
+  // Requirements created before release status was introduced are already
+  // published records. Keep them visible to the current-knowledge assistant;
+  // newly created requirements explicitly set status to offline below.
+  return requirement.status === "offline" ? "offline" : "online";
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -202,6 +216,14 @@ async function ensureStore(): Promise<RequirementStore> {
     return emptyStore;
   }
   let migrated = false;
+  for (const requirement of store.requirements) {
+    if (requirement.status !== "online" && requirement.status !== "offline") {
+      // Before release status existed, every stored requirement represented a
+      // published PRD. Preserve that meaning during schema migration.
+      requirement.status = "online";
+      migrated = true;
+    }
+  }
   for (const version of store.versions) {
     if (!version.demoEntryUrl.startsWith("/demos/published/")) continue;
     const artifact = store.artifacts.find((item) => item.id === version.artifactId);
@@ -276,6 +298,9 @@ function projectWithRequirementSummaries(store: RequirementStore, project: Proje
       createdAt: requirement.createdAt ?? summary.createdAt,
       updatedAt: requirement.updatedAt ?? summary.updatedAt,
       owner: requirement.owner ?? summary.owner ?? currentVersion?.publisher,
+      status: releaseStatusOf(requirement),
+      releaseVersion: requirement.releaseVersion,
+      releaseDate: requirement.releaseDate,
       archivedAt: requirement.archivedAt,
       archivedBy: requirement.archivedBy,
     }];
@@ -422,6 +447,46 @@ export async function restoreRequirement(requirementCode: string) {
   });
 }
 
+function validReleaseDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+export async function updateRequirementReleaseStatus(requirementCode: string, input: UpdateRequirementReleaseStatusInput) {
+  const status = input.status;
+  if (status !== "offline" && status !== "online") throw new Error("需求状态无效。");
+  const releaseVersion = input.releaseVersion?.trim() ?? "";
+  const releaseDate = input.releaseDate?.trim() ?? "";
+  if (status === "online") {
+    if (!releaseVersion || releaseVersion.length > 80) throw new Error("上线版本不能为空且不能超过 80 个字符。");
+    if (!validReleaseDate(releaseDate)) throw new Error("上线时间必须是有效日期。");
+  }
+  return mutate((store) => {
+    const requirement = store.requirements.find((item) => item.code === requirementCode);
+    if (!requirement) throw new Error("需求不存在。");
+    const project = store.projects.find((item) => item.id === requirement.projectId);
+    if (!project) throw new Error("需求所属项目不存在。");
+    if (archived(project) || archived(requirement)) throw new Error("已作废项目或需求不能修改上线状态。");
+    requirement.status = status;
+    if (status === "online") {
+      requirement.releaseVersion = releaseVersion;
+      requirement.releaseDate = releaseDate;
+    }
+    requirement.updatedAt = now();
+    const summary = project.requirements.find((item) => item.code === requirementCode);
+    if (summary) {
+      summary.status = status;
+      summary.releaseVersion = requirement.releaseVersion;
+      summary.releaseDate = requirement.releaseDate;
+      summary.updatedAt = requirement.updatedAt;
+    }
+    project.updatedAt = requirement.updatedAt;
+    return clone(requirement);
+  });
+}
+
 export async function listVersions(requirementCode: string) {
   const store = await ensureStore();
   return clone(store.versions.filter((item) => item.requirementCode === requirementCode).toSorted((a, b) => b.number - a.number));
@@ -468,6 +533,10 @@ export type RequirementKnowledgeMatch = {
   excerpt: string;
   demoEntryUrl: string;
   isHistorical: boolean;
+  releaseStatus: "online" | "offline";
+  releaseVersion?: string;
+  releaseDate?: string;
+  testCases: Array<{ id: string; title: string; status: RequirementTestStatus; priority: RequirementTestCase["priority"]; module: string }>;
   matchedTerms: string[];
 };
 
@@ -480,6 +549,16 @@ export type ScopedRequirementKnowledgeInput = {
   versionNo?: number;
   includeHistory?: boolean;
   limit?: number;
+};
+export type RequirementReleaseFact = {
+  projectId: string;
+  projectName: string;
+  requirementCode: string;
+  requirementName: string;
+  versionNo: number;
+  status: RequirementReleaseStatus;
+  releaseVersion?: string;
+  releaseDate?: string;
 };
 export type ScopedRequirementKnowledgeResult = {
   matches: RequirementKnowledgeMatch[];
@@ -500,11 +579,12 @@ function relevantExcerpt(text: string, query: string, limit = 900) {
 function prdSections(prd: string) {
   const lines = prd.replace(/\r\n/g, "\n").split("\n");
   const sections: Array<{ title: string; text: string }> = [];
+  const hasSectionBody = (text: string) => text.split("\n").some((line) => line.trim() && !/^#{1,6}\s+/.test(line));
   let title = "PRD 正文";
   let buffer: string[] = [];
   const flush = () => {
     const text = buffer.join("\n").trim();
-    if (text) sections.push({ title, text });
+    if (text && hasSectionBody(text)) sections.push({ title, text });
     buffer = [];
   };
   for (const line of lines) {
@@ -518,7 +598,7 @@ function prdSections(prd: string) {
     }
   }
   flush();
-  if (!sections.length && prd.trim()) sections.push({ title: "PRD 正文", text: prd.trim() });
+  if (!sections.length && prd.trim() && hasSectionBody(prd.trim())) sections.push({ title: "PRD 正文", text: prd.trim() });
   return sections.flatMap((section) => {
     if (section.text.length <= 1400) return [section];
     const chunks: Array<{ title: string; text: string }> = [];
@@ -548,7 +628,10 @@ function projectContext(store: RequirementStore, project: Project) {
     .map((item) => {
       const version = store.versions.find((candidate) => candidate.id === item.currentVersionId);
       const sections = version ? prdSections(version.prd).slice(0, 4).map((section) => section.title).join("、") : "";
-      return `- ${item.code}《${item.title}》${sections ? `：${sections}` : ""}`;
+      const release = releaseStatusOf(item) === "online"
+        ? `已上线${item.releaseVersion ? ` · ${item.releaseVersion}` : ""}${item.releaseDate ? ` · ${item.releaseDate}` : ""}`
+        : "未上线（规划中）";
+      return `- ${item.code}《${item.title}》· ${release}${sections ? `：${sections}` : ""}`;
     });
   return [
     `项目名称：${project.name}`,
@@ -557,6 +640,35 @@ function projectContext(store: RequirementStore, project: Project) {
     requirements.length ? requirements.join("\n") : "（当前项目暂无已发布需求）",
     "说明：这份项目上下文仅用于理解问题和检索路由，具体业务规则必须以引用的 PRD 片段为准。",
   ].join("\n");
+}
+
+/** State facts are intentionally separate from PRD retrieval so status questions work even when a PRD has no matching section. */
+export async function listScopedRequirementReleaseFacts(input: Omit<ScopedRequirementKnowledgeInput, "query" | "includeHistory" | "limit">): Promise<RequirementReleaseFact[]> {
+  const store = await ensureStore();
+  const scopedRequirement = input.requirementCode ? store.requirements.find((item) => item.code === input.requirementCode) : undefined;
+  const scopedProjectId = input.scope === "current-requirement"
+    ? scopedRequirement?.projectId
+    : input.scope === "current-project" ? input.projectId : undefined;
+  if (input.scope === "current-requirement" && !scopedRequirement) throw new Error("当前需求不存在。");
+  if (input.scope === "current-project" && !scopedProjectId) throw new Error("当前项目不存在。");
+  return clone(store.requirements.flatMap((requirement) => {
+    const project = store.projects.find((item) => item.id === requirement.projectId);
+    if (!project || archived(project) || archived(requirement)) return [];
+    if (input.scope === "current-requirement" && requirement.code !== input.requirementCode) return [];
+    if (input.scope === "current-project" && requirement.projectId !== scopedProjectId) return [];
+    const version = store.versions.find((item) => item.id === requirement.currentVersionId);
+    if (!version) return [];
+    return [{
+      projectId: project.id,
+      projectName: project.name,
+      requirementCode: requirement.code,
+      requirementName: requirement.title,
+      versionNo: version.number,
+      status: releaseStatusOf(requirement),
+      releaseVersion: requirement.releaseVersion,
+      releaseDate: requirement.releaseDate,
+    }];
+  }).toSorted((left, right) => (right.releaseDate ?? "").localeCompare(left.releaseDate ?? "") || left.requirementCode.localeCompare(right.requirementCode)));
 }
 
 /**
@@ -607,6 +719,10 @@ export async function findScopedRequirementKnowledge(input: ScopedRequirementKno
         excerpt: relevantExcerpt(section.text, query, 1000),
         demoEntryUrl: version.demoEntryUrl,
         isHistorical: version.id !== requirement.currentVersionId,
+        releaseStatus: releaseStatusOf(requirement),
+        releaseVersion: requirement.releaseVersion,
+        releaseDate: requirement.releaseDate,
+        testCases: (store.testCases ?? []).filter((item) => item.requirementCode === requirement.code && item.versionNo === version.number).slice(0, 12).map((item) => ({ id: item.id, title: item.title, status: item.status, priority: item.priority, module: item.module })),
         matchedTerms: hits.slice(0, 8),
         score,
       }];
@@ -712,6 +828,21 @@ export async function updateVersionTestCaseStatus(requirementCode: string, versi
 
 type DemoAnalysis = { summary: string; demoIds: string[]; supportsAutomation: boolean };
 
+const TEST_CASE_PRD_CONTEXT_LIMIT = 18_000;
+
+function compactTestCasePrd(prd: string) {
+  if (prd.length <= TEST_CASE_PRD_CONTEXT_LIMIT) return prd;
+  let remaining = TEST_CASE_PRD_CONTEXT_LIMIT;
+  const sections: string[] = [];
+  for (const section of prdSections(prd)) {
+    if (remaining <= 0) break;
+    const value = `${section.title}\n${section.text}`.slice(0, Math.min(1_800, remaining));
+    sections.push(value);
+    remaining -= value.length;
+  }
+  return `${sections.join("\n\n")}\n\n（PRD 较长，已按章节提取测试所需上下文。）`;
+}
+
 function decodeDemoText(value: string) {
   return value
     .replace(/&nbsp;/gi, " ")
@@ -735,7 +866,7 @@ async function analyseDemo(entryUrl: string): Promise<DemoAnalysis> {
     const html = await readFile(filePath, "utf8");
     const demoIds = Array.from(new Set(Array.from(html.matchAll(/\bdata-demo-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1].trim()).filter(Boolean))).slice(0, 80);
     const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "";
-    const text = decodeDemoText(html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).slice(0, 6000);
+    const text = decodeDemoText(html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).slice(0, 1800);
     const supportsAutomation = /addEventListener\s*\(\s*["']message["']|onmessage\s*=/.test(html) && /postMessage\s*\(/.test(html);
     return { summary: `页面标题：${decodeDemoText(title).trim() || "未设置"}\n页面可见文本：${text || "未提取到"}`, demoIds, supportsAutomation };
   } catch {
@@ -753,9 +884,9 @@ export async function getTestCaseGenerationContext(requirementCode: string, vers
   const historicalTestCases = (store.testCases ?? [])
     .filter((item) => item.requirementCode === requirementCode && item.versionNo !== versionNo)
     .toSorted((left, right) => right.versionNo - left.versionNo || left.id.localeCompare(right.id))
-    .slice(0, 80)
+    .slice(0, 15)
     .map((item) => ({ versionNo: item.versionNo, id: item.id, title: item.title, module: item.module, priority: item.priority, type: item.type, prdSource: item.prdSource }));
-  return clone({ projectName: project.name, requirementCode, requirementTitle: requirement.title, versionNo, prd: version.prd, changeSummary: version.changeSummary, demoEntryUrl: version.demoEntryUrl, demoSummary: demo.summary, demoIds: demo.demoIds, demoSupportsAutomation: demo.supportsAutomation, historicalTestCases });
+  return clone({ projectName: project.name, requirementCode, requirementTitle: requirement.title, versionNo, prd: compactTestCasePrd(version.prd), changeSummary: version.changeSummary, demoEntryUrl: version.demoEntryUrl, demoSummary: demo.summary, demoIds: demo.demoIds, demoSupportsAutomation: demo.supportsAutomation, historicalTestCases });
 }
 
 export async function uploadArtifact(file: File) {
@@ -819,9 +950,9 @@ export async function publishRequirement(input: PublishRequirementInput) {
     let requirement = store.requirements.find((item) => item.code === requirementCode);
     if (requirement?.archivedAt) throw new Error("已作废需求不能发布新版本，请先恢复需求。");
     if (!requirement) {
-      requirement = { id: requirementCode, projectId: project.id, code: requirementCode, title, currentVersionId: "", createdAt: now(), updatedAt: now(), owner: input.actor?.name || "张三（本地开发身份）" };
+      requirement = { id: requirementCode, projectId: project.id, code: requirementCode, title, currentVersionId: "", createdAt: now(), updatedAt: now(), owner: input.actor?.name || "张三（本地开发身份）", status: "offline" };
       store.requirements.push(requirement);
-      project.requirements.push({ code: requirementCode, title, latestVersion: 0, createdAt: requirement.createdAt, updatedAt: requirement.updatedAt, owner: requirement.owner });
+      project.requirements.push({ code: requirementCode, title, latestVersion: 0, createdAt: requirement.createdAt, updatedAt: requirement.updatedAt, owner: requirement.owner, status: "offline" });
     }
     if (requirement.projectId !== project.id) throw new Error("需求编码已属于另一个项目。");
 

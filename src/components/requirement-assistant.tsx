@@ -12,7 +12,7 @@ type AssistantContext = {
   requirementTitle?: string;
   versionNo?: number;
 };
-type AssistantSource = { id: string; projectId: string; projectName: string; requirementCode: string; requirementName: string; prdVersion: number; section: string; excerpt: string; historical: boolean };
+type AssistantSource = { id: string; projectId: string; projectName: string; requirementCode: string; requirementName: string; prdVersion: number; section: string; excerpt: string; historical: boolean; releaseStatus: "online" | "offline"; releaseVersion?: string; releaseDate?: string };
 type AssistantAnswer = {
   status: "defined" | "partial" | "undefined" | "conflict";
   answer: string;
@@ -24,15 +24,9 @@ type AssistantAnswer = {
   relatedRequirements: Array<{ code: string; title: string }>;
   demo?: { available: boolean; url?: string };
   testCases: Array<{ id: string; title: string; status?: string; priority?: string; module?: string }>;
+  detailed: boolean;
 };
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string; result?: AssistantAnswer };
-
-const statusCopy = {
-  defined: "✓ PRD 已明确",
-  partial: "△ PRD 仅部分定义",
-  undefined: "— 当前 PRD 未定义",
-  conflict: "! 当前需求存在规则冲突",
-} as const;
 
 function defaultScope(context: AssistantContext): AssistantScope {
   return context.kind === "requirement" ? "current-requirement" : context.kind === "project" ? "current-project" : "all-published";
@@ -126,12 +120,12 @@ export function RequirementAssistant({ context, onOpenRequirement, onOpenTestCas
 
 function AnswerContent({ result, onOpenRequirement, onOpenTestCases, onOpenDemo, onAddGap, gapSaving, gapSaved }: { result: AssistantAnswer; onOpenRequirement?: (requirementCode: string, versionNo?: number) => void; onOpenTestCases?: () => void; onOpenDemo: () => void; onAddGap: () => void; gapSaving: boolean; gapSaved: boolean }) {
   return <div className="assistant-answer-detail">
-    <b className={`assistant-answer-status is-${result.status}`}>{statusCopy[result.status]}</b>
+    <small className="assistant-section-label">要点</small>
     {result.keyPoints.length ? <ul>{result.keyPoints.map((item) => <li key={item}>{item}</li>)}</ul> : null}
     {result.flow.length ? <p className="assistant-flow">{result.flow.join(" → ")}</p> : null}
     {result.comparison ? <div className="assistant-comparison"><table><thead><tr>{result.comparison.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{result.comparison.rows.map((row, index) => <tr key={`${index}-${row.join("-")}`}>{row.map((cell, cellIndex) => <td key={`${cellIndex}-${cell}`}>{cell}</td>)}</tr>)}</tbody></table></div> : null}
     {result.undefinedPoints.length ? <p className="assistant-undefined-points">未定义：{result.undefinedPoints.join("；")}</p> : null}
-    {result.sources.length ? <div className="assistant-sources"><small>来源</small>{result.sources.map((source) => <button key={source.id} onClick={() => onOpenRequirement?.(source.requirementCode, source.prdVersion)}><small>{source.projectName} · {source.requirementName} · V{source.prdVersion}{source.historical ? " · 历史版本" : ""}</small><b>{source.section}</b><span>{source.excerpt}</span></button>)}</div> : null}
+    {result.sources.length ? <details className="assistant-sources"><summary>查看来源（{result.sources.length}）</summary>{result.sources.map((source) => <button key={source.id} onClick={() => onOpenRequirement?.(source.requirementCode, source.prdVersion)}><small>{source.requirementName} · {source.releaseStatus === "online" ? `已上线${source.releaseVersion ? ` · ${source.releaseVersion}` : ""}${source.releaseDate ? ` · ${source.releaseDate}` : ""}` : "未上线 · 规划中"} · PRD · {source.section}</small><span>{source.excerpt}</span></button>)}</details> : null}
     {result.relatedRequirements.length ? <p className="assistant-related">关联需求：{result.relatedRequirements.map((item) => <button key={item.code} onClick={() => onOpenRequirement?.(item.code)}>{item.title}</button>)}</p> : null}
     {result.testCases.length ? <div className="assistant-test-cases"><small>相关测试用例</small>{result.testCases.map((testCase) => <button key={testCase.id} onClick={() => { onOpenTestCases?.(); window.dispatchEvent(new CustomEvent("requirement-open-test-cases")); }}><b>{testCase.id}</b><span>{testCase.title}</span><em>{[testCase.priority, testCase.status, testCase.module].filter(Boolean).join(" · ")}</em></button>)}</div> : null}
     {result.demo?.available ? <button className="assistant-inline-action" onClick={onOpenDemo}>演示这个流程</button> : null}

@@ -26,6 +26,14 @@ class ModelStorageError extends Error {
   statusCode = 500;
 }
 
+class ModelConnectionError extends Error {
+  statusCode: number;
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+}
+
 export type ModelSummary = Omit<StoredModel, "apiKey"> & { hasApiKey: boolean };
 export type CreateModelInput = { name: string; baseUrl: string; model: string; apiKey: string; isDefault?: boolean };
 export type UpdateModelInput = { id: string; name?: string; baseUrl?: string; model?: string; apiKey?: string; isDefault?: boolean };
@@ -167,4 +175,28 @@ export async function resolveAssistantModel() {
   const model = process.env.AI_MODEL;
   if (!baseUrl || !apiKey || !model) throw new Error("AI 助手尚未配置。请从左侧栏底部的模型管理中新增并设为默认模型。");
   return { baseUrl, apiKey, model };
+}
+
+/** A short, read-only model probe used before expensive assistant/test-case requests. */
+export async function testAssistantModelConnection() {
+  const { baseUrl, apiKey, model } = await resolveAssistantModel();
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, temperature: 0, messages: [{ role: "user", content: "仅回复 OK" }] }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") throw new ModelConnectionError("模型连接检测超过 10 秒未返回。", 504);
+    const reason = error instanceof Error ? error.message : "网络连接失败";
+    throw new ModelConnectionError(`无法连接模型服务：${reason.slice(0, 180)}`, 502);
+  }
+  if (!response.ok) throw new ModelConnectionError(`模型连接检测失败（HTTP ${response.status}）。`, 502);
+  const payload = await response.json() as { choices?: Array<{ message?: { content?: string | null } }> };
+  if (!payload.choices?.[0]?.message?.content?.trim()) throw new ModelConnectionError("模型服务已响应，但未返回可用内容。", 502);
+  return { model, host: new URL(baseUrl).host, elapsedMs: Date.now() - startedAt };
 }
