@@ -37,6 +37,28 @@ export type RequirementGap = {
   createdBy: string;
 };
 
+export type RequirementTestStep = { step: number; action: string };
+export type RequirementTestStatus = "pending" | "passed" | "failed" | "blocked";
+export type RequirementTestCase = {
+  id: string;
+  requirementCode: string;
+  versionNo: number;
+  title: string;
+  module: string;
+  priority: "P0" | "P1" | "P2";
+  type: "happy_path" | "branch" | "exception" | "boundary" | "validation" | "permission";
+  prdSource: string;
+  preconditions: string[];
+  steps: RequirementTestStep[];
+  expectedResults: string[];
+  status: RequirementTestStatus;
+  demoAvailable: boolean;
+  demoScript: Array<{ action: string; target?: string; value?: string; expected?: string; scenario?: string }>;
+  demoVersion: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type RequirementSummary = {
   code: string;
   title: string;
@@ -90,6 +112,7 @@ export type RequirementStore = {
   artifacts: DemoArtifact[];
   /** Optional for backward compatibility with existing local stores. */
   gaps?: RequirementGap[];
+  testCases?: RequirementTestCase[];
 };
 
 export type RequirementDetail = {

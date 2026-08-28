@@ -23,6 +23,7 @@ export async function POST(request: Request) {
       count: employees.length,
       fetchedCount: directory.employees.length,
       departmentCount: directory.departmentCount,
+      diagnostics: directory.diagnostics,
     });
   } catch (error) { return apiError(error); }
 }

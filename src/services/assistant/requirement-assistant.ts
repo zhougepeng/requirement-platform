@@ -1,6 +1,7 @@
 import "server-only";
 
-import { findScopedRequirementKnowledge, type RequirementKnowledgeMatch, type RequirementKnowledgeScope } from "@/services/requirement/repository";
+import { findRelevantTestCases, findScopedRequirementKnowledge, type RequirementKnowledgeMatch, type RequirementKnowledgeScope } from "@/services/requirement/repository";
+import type { RequirementTestCase } from "@/lib/types";
 import { resolveAssistantModel } from "@/services/assistant/model-config";
 
 export type AssistantScope = RequirementKnowledgeScope;
@@ -26,7 +27,7 @@ export type RequirementAnswer = {
   undefinedPoints: string[];
   relatedRequirements: Array<{ code: string; title: string }>;
   demo?: { available: boolean; url?: string };
-  testCases: Array<{ id: string; title: string; status?: string }>;
+  testCases: Array<{ id: string; title: string; status?: string; priority?: string; module?: string }>;
 };
 
 type AssistantInput = {
@@ -135,15 +136,26 @@ function undefinedAnswer(question: string, input: AssistantInput): RequirementAn
   return { status: "undefined", answer: `${target}未定义“${question}”相关规则。`, keyPoints: [], flow: [], sources: [], undefinedPoints: [question], relatedRequirements: [], testCases: [] };
 }
 
+function isTestQuestion(question: string) {
+  return /测试|用例|验证|覆盖|测过|已通过|失败|阻塞|回归/.test(question);
+}
+
+async function relevantTestCases(input: AssistantInput, question: string) {
+  if (input.scope !== "current-requirement" || !input.requirementCode || !input.versionNo || !isTestQuestion(question)) return [];
+  const cases = await findRelevantTestCases(input.requirementCode, input.versionNo, question);
+  return cases.map((item: RequirementTestCase) => ({ id: item.id, title: item.title, status: item.status, priority: item.priority, module: item.module }));
+}
+
 export async function askRequirementAssistant(input: AssistantInput): Promise<RequirementAnswer> {
   const question = input.question.trim();
   if (!question || question.length > 2000) throw new Error("提问不能为空且不能超过 2000 字。");
+  const testCases = await relevantTestCases(input, question);
   const result = await findScopedRequirementKnowledge({ ...input, query: question, limit: 6 });
-  if (!result.matches.length) return undefinedAnswer(question, input);
+  if (!result.matches.length) return { ...undefinedAnswer(question, input), testCases };
   const conflicts = conflictMatches(result.matches, question);
   if (conflicts.length) {
     const sources = conflicts.map(sourceFromMatch);
-    return { status: "conflict", answer: `已发现 ${sources[0].requirementName} 与 ${sources[1].requirementName} 对“${question}”存在相反表述，请由产品负责人确认，不应由 AI 自行决定。`, keyPoints: [], flow: [], sources, undefinedPoints: [], relatedRequirements: result.relatedRequirements, testCases: [] };
+    return { status: "conflict", answer: `已发现 ${sources[0].requirementName} 与 ${sources[1].requirementName} 对“${question}”存在相反表述，请由产品负责人确认，不应由 AI 自行决定。`, keyPoints: [], flow: [], sources, undefinedPoints: [], relatedRequirements: result.relatedRequirements, testCases };
   }
   const modelAnswer = await answerWithModel(question, result.matches, result.projectContext);
   const status = modelAnswer.status === "defined" || modelAnswer.status === "partial" || modelAnswer.status === "undefined" ? modelAnswer.status : "partial";
@@ -151,7 +163,7 @@ export async function askRequirementAssistant(input: AssistantInput): Promise<Re
   const sourceMap = new Map(result.matches.map((match) => [match.id, match]));
   const cited = textList(modelAnswer.sourceIds, 6).map((id) => sourceMap.get(id)).filter((match): match is RequirementKnowledgeMatch => Boolean(match));
   if (!answer || (status !== "undefined" && !cited.length)) {
-    return { status: "partial", answer: "已找到相关 PRD 片段，但无法生成可校验的结论。请查看下方来源，或换一种更具体的问法。", keyPoints: [], flow: [], sources: result.matches.slice(0, 3).map(sourceFromMatch), undefinedPoints: [question], relatedRequirements: result.relatedRequirements, testCases: [] };
+    return { status: "partial", answer: "已找到相关 PRD 片段，但无法生成可校验的结论。请查看下方来源，或换一种更具体的问法。", keyPoints: [], flow: [], sources: result.matches.slice(0, 3).map(sourceFromMatch), undefinedPoints: [question], relatedRequirements: result.relatedRequirements, testCases };
   }
   const comparison = modelAnswer.comparison && typeof modelAnswer.comparison === "object" ? modelAnswer.comparison as { columns?: unknown; rows?: unknown } : undefined;
   const columns = textList(comparison?.columns, 6);
@@ -168,8 +180,7 @@ export async function askRequirementAssistant(input: AssistantInput): Promise<Re
     undefinedPoints: textList(modelAnswer.undefinedPoints),
     relatedRequirements: result.relatedRequirements,
     demo: currentMatch?.demoEntryUrl ? { available: true, url: currentMatch.demoEntryUrl } : undefined,
-    // The current store has no test-case entity. Keep the contract and never invent test coverage.
-    testCases: [],
+    testCases,
   };
 }
 

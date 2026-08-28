@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, Project, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementGap, RequirementStore, RequirementVersion } from "@/lib/types";
+import type { DemoArtifact, Project, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementVersion } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -235,6 +235,10 @@ async function ensureStore(): Promise<RequirementStore> {
   }
   if (!Array.isArray(store.gaps)) {
     store.gaps = [];
+    migrated = true;
+  }
+  if (!Array.isArray(store.testCases)) {
+    store.testCases = [];
     migrated = true;
   }
   if (migrated) await writeStore(store);
@@ -660,6 +664,98 @@ export async function addRequirementGap(requirementCode: string, question: strin
     (store.gaps ??= []).push(gap);
     return clone(gap);
   });
+}
+
+export async function listVersionTestCases(requirementCode: string, versionNo: number) {
+  const store = await ensureStore();
+  return clone((store.testCases ?? []).filter((item) => item.requirementCode === requirementCode && item.versionNo === versionNo).toSorted((left, right) => left.id.localeCompare(right.id)));
+}
+
+/** Lightweight, version-scoped lookup used by the requirement assistant for test questions. */
+export async function findRelevantTestCases(requirementCode: string, versionNo: number, query: string) {
+  const cases = await listVersionTestCases(requirementCode, versionNo);
+  const terms = queryTerms(query);
+  if (!terms.length) return cases.slice(0, 5);
+  return cases
+    .map((item) => {
+      const haystack = [item.id, item.title, item.module, item.prdSource, ...item.preconditions, ...item.steps.map((step) => step.action), ...item.expectedResults].join(" ").toLowerCase();
+      const score = terms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0);
+      return { item, score };
+    })
+    .filter(({ score }) => score > 0)
+    .toSorted((left, right) => right.score - left.score || left.item.id.localeCompare(right.item.id))
+    .slice(0, 5)
+    .map(({ item }) => item);
+}
+
+export async function replaceVersionTestCases(requirementCode: string, versionNo: number, cases: Omit<RequirementTestCase, "id" | "requirementCode" | "versionNo" | "createdAt" | "updatedAt">[]) {
+  return mutate((store) => {
+    const version = store.versions.find((item) => item.requirementCode === requirementCode && item.number === versionNo);
+    if (!version) throw new Error("需求版本不存在。");
+    const timestamp = now();
+    store.testCases = (store.testCases ?? []).filter((item) => item.requirementCode !== requirementCode || item.versionNo !== versionNo);
+    const saved = cases.slice(0, 80).map((item, index) => ({ ...item, id: `TC-${String(index + 1).padStart(3, "0")}`, requirementCode, versionNo, createdAt: timestamp, updatedAt: timestamp }));
+    store.testCases.push(...saved);
+    return clone(saved);
+  });
+}
+
+export async function updateVersionTestCaseStatus(requirementCode: string, versionNo: number, testCaseId: string, status: RequirementTestStatus) {
+  return mutate((store) => {
+    const item = (store.testCases ?? []).find((candidate) => candidate.requirementCode === requirementCode && candidate.versionNo === versionNo && candidate.id === testCaseId);
+    if (!item) throw new Error("测试用例不存在。");
+    item.status = status;
+    item.updatedAt = now();
+    return clone(item);
+  });
+}
+
+type DemoAnalysis = { summary: string; demoIds: string[]; supportsAutomation: boolean };
+
+function decodeDemoText(value: string) {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'");
+}
+
+async function analyseDemo(entryUrl: string): Promise<DemoAnalysis> {
+  const relative = /^\/demo-assets\/(.+)$/.exec(entryUrl)?.[1];
+  if (!relative) return { summary: "当前版本没有可读取的 Demo 页面。", demoIds: [], supportsAutomation: false };
+  const segments = relative.split("/");
+  if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === ".." || /[\\/]/.test(segment))) {
+    return { summary: "当前版本的 Demo 路径不合法，无法分析。", demoIds: [], supportsAutomation: false };
+  }
+  const filePath = path.resolve(PUBLISHED_DEMO_DIR, ...segments);
+  if (!filePath.startsWith(`${PUBLISHED_DEMO_DIR}${path.sep}`)) return { summary: "当前版本的 Demo 路径不合法，无法分析。", demoIds: [], supportsAutomation: false };
+  try {
+    const html = await readFile(filePath, "utf8");
+    const demoIds = Array.from(new Set(Array.from(html.matchAll(/\bdata-demo-id\s*=\s*["']([^"']+)["']/gi), (match) => match[1].trim()).filter(Boolean))).slice(0, 80);
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "";
+    const text = decodeDemoText(html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).slice(0, 6000);
+    const supportsAutomation = /addEventListener\s*\(\s*["']message["']|onmessage\s*=/.test(html) && /postMessage\s*\(/.test(html);
+    return { summary: `页面标题：${decodeDemoText(title).trim() || "未设置"}\n页面可见文本：${text || "未提取到"}`, demoIds, supportsAutomation };
+  } catch {
+    return { summary: "Demo 文件暂时无法读取。", demoIds: [], supportsAutomation: false };
+  }
+}
+
+export async function getTestCaseGenerationContext(requirementCode: string, versionNo: number) {
+  const store = await ensureStore();
+  const requirement = store.requirements.find((item) => item.code === requirementCode);
+  const version = store.versions.find((item) => item.requirementCode === requirementCode && item.number === versionNo);
+  const project = requirement ? store.projects.find((item) => item.id === requirement.projectId) : undefined;
+  if (!requirement || !version || !project || archived(requirement) || archived(project)) throw new Error("需求或版本不存在，或已作废。");
+  const demo = await analyseDemo(version.demoEntryUrl);
+  const historicalTestCases = (store.testCases ?? [])
+    .filter((item) => item.requirementCode === requirementCode && item.versionNo !== versionNo)
+    .toSorted((left, right) => right.versionNo - left.versionNo || left.id.localeCompare(right.id))
+    .slice(0, 80)
+    .map((item) => ({ versionNo: item.versionNo, id: item.id, title: item.title, module: item.module, priority: item.priority, type: item.type, prdSource: item.prdSource }));
+  return clone({ projectName: project.name, requirementCode, requirementTitle: requirement.title, versionNo, prd: version.prd, changeSummary: version.changeSummary, demoEntryUrl: version.demoEntryUrl, demoSummary: demo.summary, demoIds: demo.demoIds, demoSupportsAutomation: demo.supportsAutomation, historicalTestCases });
 }
 
 export async function uploadArtifact(file: File) {

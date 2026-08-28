@@ -23,7 +23,7 @@ type AssistantAnswer = {
   undefinedPoints: string[];
   relatedRequirements: Array<{ code: string; title: string }>;
   demo?: { available: boolean; url?: string };
-  testCases: Array<{ id: string; title: string; status?: string }>;
+  testCases: Array<{ id: string; title: string; status?: string; priority?: string; module?: string }>;
 };
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string; result?: AssistantAnswer };
 
@@ -51,7 +51,7 @@ function quickQuestions(context: AssistantContext) {
   return ["有哪些项目和核心流程？", "某个字段在哪里定义？", "最近有哪些需求发生变化？", "哪些规则 PRD 还没有定义？"];
 }
 
-export function RequirementAssistant({ context, onOpenRequirement }: { context: AssistantContext; onOpenRequirement?: (requirementCode: string, versionNo?: number) => void }) {
+export function RequirementAssistant({ context, onOpenRequirement, onOpenTestCases }: { context: AssistantContext; onOpenRequirement?: (requirementCode: string, versionNo?: number) => void; onOpenTestCases?: () => void }) {
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -114,7 +114,7 @@ export function RequirementAssistant({ context, onOpenRequirement }: { context: 
       <header><div><small>需求智能体</small><h2 id="assistant-title">{contextDetail}</h2></div><button className="assistant-close" onClick={() => setOpen(false)} aria-label="关闭需求智能体">×</button></header>
       <div className="assistant-messages" aria-live="polite">
         {messages.length ? messages.map((message) => <article className={`assistant-message is-${message.role}`} key={message.id}>
-          <span>{message.role === "assistant" ? "AI" : "我"}</span><div><p>{message.content}</p>{message.result ? <AnswerContent result={message.result} onOpenRequirement={onOpenRequirement} onOpenDemo={() => message.result?.demo?.url && window.open(message.result.demo.url, "_blank", "noopener,noreferrer")} onAddGap={() => void addGap(message)} gapSaving={gapSaving === message.id} gapSaved={gapSaving === `done:${message.id}`} /> : null}</div>
+          <span>{message.role === "assistant" ? "AI" : "我"}</span><div><p>{message.content}</p>{message.result ? <AnswerContent result={message.result} onOpenRequirement={onOpenRequirement} onOpenTestCases={onOpenTestCases} onOpenDemo={() => message.result?.demo?.url && window.open(message.result.demo.url, "_blank", "noopener,noreferrer")} onAddGap={() => void addGap(message)} gapSaving={gapSaving === message.id} gapSaved={gapSaving === `done:${message.id}`} /> : null}</div>
         </article>) : <div className="assistant-empty"><b>{context.kind === "library" ? "需求库里想了解什么？" : "项目需求需要确认什么？"}</b><span>回答只引用正式发布的 PRD。</span><div className="assistant-quick-questions">{quickQuestions(context).map((item) => <button key={item} onClick={() => void ask(item)}>{item}</button>)}</div></div>}
         {sending ? <article className="assistant-message is-assistant is-pending"><span>AI</span><p>正在检索已发布 PRD…</p></article> : null}
         {error ? <p className="assistant-error">{error}</p> : null}
@@ -124,7 +124,7 @@ export function RequirementAssistant({ context, onOpenRequirement }: { context: 
   </>;
 }
 
-function AnswerContent({ result, onOpenRequirement, onOpenDemo, onAddGap, gapSaving, gapSaved }: { result: AssistantAnswer; onOpenRequirement?: (requirementCode: string, versionNo?: number) => void; onOpenDemo: () => void; onAddGap: () => void; gapSaving: boolean; gapSaved: boolean }) {
+function AnswerContent({ result, onOpenRequirement, onOpenTestCases, onOpenDemo, onAddGap, gapSaving, gapSaved }: { result: AssistantAnswer; onOpenRequirement?: (requirementCode: string, versionNo?: number) => void; onOpenTestCases?: () => void; onOpenDemo: () => void; onAddGap: () => void; gapSaving: boolean; gapSaved: boolean }) {
   return <div className="assistant-answer-detail">
     <b className={`assistant-answer-status is-${result.status}`}>{statusCopy[result.status]}</b>
     {result.keyPoints.length ? <ul>{result.keyPoints.map((item) => <li key={item}>{item}</li>)}</ul> : null}
@@ -133,6 +133,7 @@ function AnswerContent({ result, onOpenRequirement, onOpenDemo, onAddGap, gapSav
     {result.undefinedPoints.length ? <p className="assistant-undefined-points">未定义：{result.undefinedPoints.join("；")}</p> : null}
     {result.sources.length ? <div className="assistant-sources"><small>来源</small>{result.sources.map((source) => <button key={source.id} onClick={() => onOpenRequirement?.(source.requirementCode, source.prdVersion)}><small>{source.projectName} · {source.requirementName} · V{source.prdVersion}{source.historical ? " · 历史版本" : ""}</small><b>{source.section}</b><span>{source.excerpt}</span></button>)}</div> : null}
     {result.relatedRequirements.length ? <p className="assistant-related">关联需求：{result.relatedRequirements.map((item) => <button key={item.code} onClick={() => onOpenRequirement?.(item.code)}>{item.title}</button>)}</p> : null}
+    {result.testCases.length ? <div className="assistant-test-cases"><small>相关测试用例</small>{result.testCases.map((testCase) => <button key={testCase.id} onClick={() => { onOpenTestCases?.(); window.dispatchEvent(new CustomEvent("requirement-open-test-cases")); }}><b>{testCase.id}</b><span>{testCase.title}</span><em>{[testCase.priority, testCase.status, testCase.module].filter(Boolean).join(" · ")}</em></button>)}</div> : null}
     {result.demo?.available ? <button className="assistant-inline-action" onClick={onOpenDemo}>演示这个流程</button> : null}
     {(result.status === "undefined" || result.status === "partial") ? <button className="assistant-inline-action" onClick={onAddGap} disabled={gapSaving || gapSaved}>{gapSaved ? "已添加为待补充项" : gapSaving ? "正在添加…" : "添加为待补充项"}</button> : null}
   </div>;
