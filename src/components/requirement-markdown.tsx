@@ -60,15 +60,16 @@ function MermaidDiagram({ source }: { source: string }) {
   return <div className="mermaid-diagram" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
-function resolveImageUrl(source: string, demoEntryUrl: string) {
+function resolveImageUrl(source: string, demoEntryUrl: string, assetBaseUrl?: string) {
   const value = source.trim();
   if (/^(https?:|data:image\/)/i.test(value)) return value;
   if (!value || value.startsWith("/") || value.includes("\\") || value.split("/").some((segment) => !segment || segment === "." || segment === "..")) return "";
-  const base = demoEntryUrl.slice(0, demoEntryUrl.lastIndexOf("/") + 1);
+  const baseUrl = assetBaseUrl || demoEntryUrl;
+  const base = baseUrl.slice(0, baseUrl.lastIndexOf("/") + 1);
   return `${base}${value.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-export function RequirementMarkdown({ source, demoEntryUrl, className }: { source: string; demoEntryUrl: string; className?: string }) {
+export function RequirementMarkdown({ source, demoEntryUrl, assetBaseUrl, className }: { source: string; demoEntryUrl: string; assetBaseUrl?: string; className?: string }) {
   return <article className={className ? `markdown-preview ${className}` : "markdown-preview"}>
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -80,7 +81,7 @@ export function RequirementMarkdown({ source, demoEntryUrl, className }: { sourc
           return <code className={codeClassName}>{children}</code>;
         },
         img: ({ src, alt }) => {
-          const imageUrl = typeof src === "string" ? resolveImageUrl(src, demoEntryUrl) : "";
+          const imageUrl = typeof src === "string" ? resolveImageUrl(src, demoEntryUrl, assetBaseUrl) : "";
           if (!imageUrl) return <span className="markdown-image-missing">图片资源不可用：{alt || "未命名图片"}</span>;
           // The source is an authenticated, version-scoped route, so Next image optimization cannot fetch it server-side.
           // eslint-disable-next-line @next/next/no-img-element

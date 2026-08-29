@@ -9,6 +9,7 @@ export type RequirementKnowledgeMatch = localStore.RequirementKnowledgeMatch;
 export type RequirementKnowledgeScope = localStore.RequirementKnowledgeScope;
 export type RequirementReleaseFact = localStore.RequirementReleaseFact;
 export type RequirementReleaseStatus = localStore.RequirementReleaseStatus;
+export type CurrentRequirementKnowledgeSource = localStore.CurrentRequirementKnowledgeSource;
 export type UpdateRequirementReleaseStatusInput = localStore.UpdateRequirementReleaseStatusInput;
 export type RequirementTestCase = import("@/lib/types").RequirementTestCase;
 
@@ -34,6 +35,7 @@ export const replaceVersionTestCases = localStore.replaceVersionTestCases;
 export const updateVersionTestCaseStatus = localStore.updateVersionTestCaseStatus;
 export const getTestCaseGenerationContext = localStore.getTestCaseGenerationContext;
 export const searchRequirements = localStore.searchRequirements;
+export const listCurrentRequirementKnowledgeSources = localStore.listCurrentRequirementKnowledgeSources;
 export const findRequirementKnowledge = localStore.findRequirementKnowledge;
 export const findScopedRequirementKnowledge = localStore.findScopedRequirementKnowledge;
 export const listScopedRequirementReleaseFacts = localStore.listScopedRequirementReleaseFacts;

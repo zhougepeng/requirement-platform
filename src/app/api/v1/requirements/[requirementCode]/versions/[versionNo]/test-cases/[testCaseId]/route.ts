@@ -1,6 +1,7 @@
 import { apiError, apiJson } from "@/lib/api-response";
 import { updateVersionTestCaseStatus } from "@/services/requirement/repository";
 import { actorFromRequest } from "@/services/auth/request-actor";
+import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +14,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ re
     const body = await request.json() as { status?: unknown };
     if (!Number.isInteger(number) || number < 1) throw new Error("版本号不合法。");
     if (body.status !== "pending" && body.status !== "passed" && body.status !== "failed" && body.status !== "blocked") throw new Error("测试状态不合法。");
-    return apiJson(await updateVersionTestCaseStatus(requirementCode, number, testCaseId, body.status));
+    const updated = await updateVersionTestCaseStatus(requirementCode, number, testCaseId, body.status);
+    scheduleRequirementKnowledgeSync(requirementCode);
+    return apiJson(updated);
   } catch (error) { return apiError(error); }
 }

@@ -19,7 +19,7 @@ const assistantRequestSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await actorFromRequest(request);
+    const actor = await actorFromRequest(request);
     const body = await request.json();
     const input = assistantRequestSchema.parse(body);
     return apiJson(await askRequirementAssistant({
@@ -28,6 +28,7 @@ export async function POST(request: Request) {
       requirementCode: input.requirement_code,
       projectId: input.project_id,
       versionNo: input.version_no,
+      actor,
     }));
   } catch (error) {
     return apiError(error);

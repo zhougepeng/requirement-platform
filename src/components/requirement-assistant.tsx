@@ -1,6 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Icon } from "@/components/icons";
 
 type AssistantScope = "current-requirement" | "current-project" | "all-published";
@@ -12,7 +17,7 @@ type AssistantContext = {
   requirementTitle?: string;
   versionNo?: number;
 };
-type AssistantSource = { id: string; projectId: string; projectName: string; requirementCode: string; requirementName: string; prdVersion: number; section: string; excerpt: string; historical: boolean; releaseStatus: "online" | "offline"; releaseVersion?: string; releaseDate?: string };
+type AssistantSource = { id: string; projectId: string; projectName: string; requirementCode: string; requirementName: string; prdVersion: number; section: string; excerpt: string; historical: boolean; releaseStatus: "online" | "scheduled" | "offline"; scheduleVersion?: string; scheduledGrayDate?: string; scheduledFullDate?: string; releaseVersion?: string; releaseDate?: string };
 type AssistantAnswer = {
   status: "defined" | "partial" | "undefined" | "conflict";
   answer: string;
@@ -27,6 +32,17 @@ type AssistantAnswer = {
   detailed: boolean;
 };
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string; result?: AssistantAnswer };
+type TriggerPosition = { left: number; top: number };
+type TriggerDragState = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  startLeft: number;
+  startTop: number;
+  moved: boolean;
+};
+
+const triggerPositionKey = "requirement-platform:assistant-trigger-position:v1";
 
 function defaultScope(context: AssistantContext): AssistantScope {
   return context.kind === "requirement" ? "current-requirement" : context.kind === "project" ? "current-project" : "all-published";
@@ -52,6 +68,84 @@ export function RequirementAssistant({ context, onOpenRequirement, onOpenTestCas
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
   const [gapSaving, setGapSaving] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const triggerDragRef = useRef<TriggerDragState | null>(null);
+  const ignoreTriggerClickRef = useRef(false);
+
+  function applyTriggerPosition(position: TriggerPosition) {
+    const trigger = triggerRef.current;
+    if (!trigger) return position;
+    const bounds = trigger.getBoundingClientRect();
+    const left = Math.round(
+      Math.min(Math.max(8, position.left), window.innerWidth - bounds.width - 8),
+    );
+    const top = Math.round(
+      Math.min(Math.max(8, position.top), window.innerHeight - bounds.height - 8),
+    );
+    trigger.style.left = `${left}px`;
+    trigger.style.top = `${top}px`;
+    trigger.style.right = "auto";
+    trigger.style.bottom = "auto";
+    return { left, top };
+  }
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(triggerPositionKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<TriggerPosition>;
+      if (!Number.isFinite(parsed.left) || !Number.isFinite(parsed.top)) return;
+      applyTriggerPosition({ left: parsed.left as number, top: parsed.top as number });
+    } catch {
+      // A missing or malformed local preference should not block the assistant.
+    }
+  }, []);
+
+  function beginTriggerDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    triggerDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: bounds.left,
+      startTop: bounds.top,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveTrigger(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = triggerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(deltaX, deltaY) < 5) return;
+    drag.moved = true;
+    ignoreTriggerClickRef.current = true;
+    applyTriggerPosition({
+      left: drag.startLeft + deltaX,
+      top: drag.startTop + deltaY,
+    });
+  }
+
+  function endTriggerDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = triggerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    triggerDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (!drag.moved) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    try {
+      window.localStorage.setItem(
+        triggerPositionKey,
+        JSON.stringify({ left: Math.round(bounds.left), top: Math.round(bounds.top) }),
+      );
+    } catch {
+      // The trigger remains movable even if this browser cannot persist preferences.
+    }
+  }
   async function ask(value = question) {
     const prompt = value.trim();
     if (!prompt || sending) return;
@@ -103,14 +197,14 @@ export function RequirementAssistant({ context, onOpenRequirement, onOpenTestCas
     : context.kind === "project" ? `${context.projectName ?? "当前项目"} ＞ 全部需求` : "所有已发布需求";
 
   return <>
-    <button className={`assistant-trigger ${context.kind === "library" ? "assistant-trigger-knowledge" : ""}`} onClick={() => setOpen(true)} title="打开需求智能体" aria-label="打开需求智能体"><Icon name="message" /><span className="sr-only">需求智能体</span></button>
+    <button ref={triggerRef} type="button" className="assistant-trigger" onClick={() => { if (ignoreTriggerClickRef.current) { ignoreTriggerClickRef.current = false; return; } setOpen(true); }} onPointerDown={beginTriggerDrag} onPointerMove={moveTrigger} onPointerUp={endTriggerDrag} onPointerCancel={endTriggerDrag} title="打开需求智能体；可拖拽调整位置" aria-label="打开需求智能体，可拖拽调整位置"><Icon name="message" /><span className="sr-only">需求智能体</span></button>
     {open ? <section className="assistant-panel" role="dialog" aria-modal="false" aria-labelledby="assistant-title">
       <header><div><small>需求智能体</small><h2 id="assistant-title">{contextDetail}</h2></div><button className="assistant-close" onClick={() => setOpen(false)} aria-label="关闭需求智能体">×</button></header>
       <div className="assistant-messages" aria-live="polite">
         {messages.length ? messages.map((message) => <article className={`assistant-message is-${message.role}`} key={message.id}>
           <span>{message.role === "assistant" ? "AI" : "我"}</span><div><p>{message.content}</p>{message.result ? <AnswerContent result={message.result} onOpenRequirement={onOpenRequirement} onOpenTestCases={onOpenTestCases} onOpenDemo={() => message.result?.demo?.url && window.open(message.result.demo.url, "_blank", "noopener,noreferrer")} onAddGap={() => void addGap(message)} gapSaving={gapSaving === message.id} gapSaved={gapSaving === `done:${message.id}`} /> : null}</div>
-        </article>) : <div className="assistant-empty"><b>{context.kind === "library" ? "需求库里想了解什么？" : "项目需求需要确认什么？"}</b><span>回答只引用正式发布的 PRD。</span><div className="assistant-quick-questions">{quickQuestions(context).map((item) => <button key={item} onClick={() => void ask(item)}>{item}</button>)}</div></div>}
-        {sending ? <article className="assistant-message is-assistant is-pending"><span>AI</span><p>正在检索已发布 PRD…</p></article> : null}
+        </article>) : <div className="assistant-empty"><b>{context.kind === "library" ? "需求库里想了解什么？" : "项目需求需要确认什么？"}</b><span>回答使用已同步的最新需求、PRD、测试和上线状态。</span><div className="assistant-quick-questions">{quickQuestions(context).map((item) => <button key={item} onClick={() => void ask(item)}>{item}</button>)}</div></div>}
+        {sending ? <article className="assistant-message is-assistant is-pending"><span>AI</span><p>正在检索需求知识库…</p></article> : null}
         {error ? <p className="assistant-error">{error}</p> : null}
       </div>
       <div className="assistant-composer"><textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void ask(); } }} placeholder="询问需求流程、规则、字段或异常处理…" maxLength={2000} aria-label="向需求智能体提问" rows={2} /><button className="assistant-send" onClick={() => void ask()} disabled={!question.trim() || sending} aria-label="发送问题"><Icon name="send" /></button><small>Enter 发送，Shift + Enter 换行</small></div>
@@ -125,7 +219,7 @@ function AnswerContent({ result, onOpenRequirement, onOpenTestCases, onOpenDemo,
     {result.flow.length ? <p className="assistant-flow">{result.flow.join(" → ")}</p> : null}
     {result.comparison ? <div className="assistant-comparison"><table><thead><tr>{result.comparison.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{result.comparison.rows.map((row, index) => <tr key={`${index}-${row.join("-")}`}>{row.map((cell, cellIndex) => <td key={`${cellIndex}-${cell}`}>{cell}</td>)}</tr>)}</tbody></table></div> : null}
     {result.undefinedPoints.length ? <p className="assistant-undefined-points">未定义：{result.undefinedPoints.join("；")}</p> : null}
-    {result.sources.length ? <details className="assistant-sources"><summary>查看来源（{result.sources.length}）</summary>{result.sources.map((source) => <button key={source.id} onClick={() => onOpenRequirement?.(source.requirementCode, source.prdVersion)}><small>{source.requirementName} · {source.releaseStatus === "online" ? `已上线${source.releaseVersion ? ` · ${source.releaseVersion}` : ""}${source.releaseDate ? ` · ${source.releaseDate}` : ""}` : "未上线 · 规划中"} · PRD · {source.section}</small><span>{source.excerpt}</span></button>)}</details> : null}
+    {result.sources.length ? <details className="assistant-sources"><summary>查看来源（{result.sources.length}）</summary>{result.sources.map((source) => <button key={source.id} onClick={() => onOpenRequirement?.(source.requirementCode, source.prdVersion)}><small>{source.requirementName} · {source.releaseStatus === "online" ? `已上线${source.releaseVersion ? ` · ${source.releaseVersion}` : ""}${source.releaseDate ? ` · ${source.releaseDate}` : ""}` : source.releaseStatus === "scheduled" ? `已排期${source.scheduleVersion ? ` · ${source.scheduleVersion}` : ""}${source.scheduledFullDate ? ` · 预计全量 ${source.scheduledFullDate}` : ""}` : "未上线 · 规划中"} · PRD · {source.section}</small><span>{source.excerpt}</span></button>)}</details> : null}
     {result.relatedRequirements.length ? <p className="assistant-related">关联需求：{result.relatedRequirements.map((item) => <button key={item.code} onClick={() => onOpenRequirement?.(item.code)}>{item.title}</button>)}</p> : null}
     {result.testCases.length ? <div className="assistant-test-cases"><small>相关测试用例</small>{result.testCases.map((testCase) => <button key={testCase.id} onClick={() => { onOpenTestCases?.(); window.dispatchEvent(new CustomEvent("requirement-open-test-cases")); }}><b>{testCase.id}</b><span>{testCase.title}</span><em>{[testCase.priority, testCase.status, testCase.module].filter(Boolean).join(" · ")}</em></button>)}</div> : null}
     {result.demo?.available ? <button className="assistant-inline-action" onClick={onOpenDemo}>演示这个流程</button> : null}

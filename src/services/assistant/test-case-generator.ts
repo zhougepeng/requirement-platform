@@ -1,7 +1,8 @@
 import "server-only";
 
 import { getTestCaseGenerationContext, replaceVersionTestCases } from "@/services/requirement/repository";
-import { resolveAssistantModel } from "@/services/assistant/model-config";
+import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
+import { reasoningEffortPayload, resolveAssistantModel } from "@/services/assistant/model-config";
 import type { RequirementTestCase } from "@/lib/types";
 
 type ModelContentPart = { type?: string; text?: string };
@@ -108,13 +109,13 @@ export async function generateTestCases(requirementCode: string, versionNo: numb
     demoChars: context.demoSummary.length,
     historyCount: context.historicalTestCases.length,
   });
-  const { baseUrl, apiKey, model } = await resolveAssistantModel();
+  const { baseUrl, apiKey, model, reasoningEffort } = await resolveAssistantModel();
   let response: Response;
   try {
     logGeneration(requestId, "model_request_started", startedAt, { model, endpointHost: new URL(baseUrl).host });
     response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, cache: "no-store", signal: AbortSignal.timeout(60_000),
-      body: JSON.stringify({ model, temperature: 0, response_format: { type: "json_object" }, messages: [
+      body: JSON.stringify({ model, temperature: 0, ...reasoningEffortPayload(reasoningEffort), response_format: { type: "json_object" }, messages: [
         { role: "system", content: "你是测试用例生成助手。只能依据给出的 PRD 生成测试条件，PRD 未定义的规则不能编造。只输出 JSON 对象：{cases:[{title,module,priority,type,prd_source,preconditions,steps:[{step,action}],expected_results,demo_available,demo_script}]}。最多生成 16 条高价值用例，优先覆盖主流程、关键分支、异常、边界和表单校验，不要为同一规则拆出重复用例。priority 只能 P0/P1/P2，type 只能 happy_path/branch/exception/boundary/validation/permission。Demo 信息只用于识别页面与交互范围，不能补充 PRD 未定义的业务规则。只有提供稳定 data-demo-id 且明确支持自动化通信协议时，才可以将 demo_available 设为 true 并生成 demo_script；否则必须为 false 和 []。" },
         { role: "user", content: `项目：${context.projectName}\n需求：${context.requirementTitle}（${context.requirementCode} V${context.versionNo}）\n版本说明：${context.changeSummary}\n\nPRD：\n${context.prd}\n\nDemo 页面分析：\n${context.demoSummary}\n\nDemo 可用 data-demo-id：${context.demoIds.length ? context.demoIds.join(",") : "无"}\nDemo 自动化通信协议：${context.demoSupportsAutomation ? "已检测到" : "未检测到"}\n\n历史版本测试用例（只作覆盖参考，必须以当前 PRD 为准，不得复制后直接保留）：\n${context.historicalTestCases.length ? context.historicalTestCases.map((item) => `V${item.versionNo} ${item.id}｜${item.priority}｜${item.module}｜${item.title}｜${item.prdSource}`).join("\n") : "无"}` },
       ] }),
@@ -171,6 +172,7 @@ export async function generateTestCases(requirementCode: string, versionNo: numb
   if (!cases.length) throw new TestCaseGenerationError(`AI 已返回用例，但缺少标题、测试步骤或预期结果（请求 ${requestId}）。请重试。`, 422);
   logGeneration(requestId, "validation_complete", startedAt, { caseCount: cases.length, responseChars: raw.length });
   const saved = await replaceVersionTestCases(requirementCode, versionNo, cases);
+  scheduleRequirementKnowledgeSync(requirementCode);
   logGeneration(requestId, "saved", startedAt, { caseCount: saved.length });
   return saved;
 }

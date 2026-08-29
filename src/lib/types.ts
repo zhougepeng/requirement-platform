@@ -11,6 +11,19 @@ export type RequirementVersion = {
   versionName?: string;
   sourceVersionNo?: number;
   assetManifest?: RequirementAssetManifest;
+  documents?: RequirementDocument[];
+};
+
+export type RequirementDocumentKind = "prd" | "demo";
+export type RequirementDocument = {
+  id: string;
+  name: string;
+  path: string;
+  kind: RequirementDocumentKind;
+  mimeType: string;
+  order: number;
+  content?: string;
+  url?: string;
 };
 
 export type RequirementAssetFile = { path: string; size: number; hash: string; mimeType: string };
@@ -68,7 +81,10 @@ export type RequirementSummary = {
   owner?: string;
   archivedAt?: string;
   archivedBy?: string;
-  status?: "offline" | "online";
+  status?: "offline" | "scheduled" | "online";
+  scheduleVersion?: string;
+  scheduledGrayDate?: string;
+  scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
 };
@@ -96,7 +112,10 @@ export type Requirement = {
   owner?: string;
   archivedAt?: string;
   archivedBy?: string;
-  status?: "offline" | "online";
+  status?: "offline" | "scheduled" | "online";
+  scheduleVersion?: string;
+  scheduledGrayDate?: string;
+  scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
 };

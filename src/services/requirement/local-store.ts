@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, Project, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementVersion } from "@/lib/types";
+import type { DemoArtifact, Project, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementVersion } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -57,9 +57,12 @@ export type UpdateProjectInput = {
   owner?: string;
 };
 
-export type RequirementReleaseStatus = "offline" | "online";
+export type RequirementReleaseStatus = "offline" | "scheduled" | "online";
 export type UpdateRequirementReleaseStatusInput = {
   status: RequirementReleaseStatus;
+  scheduleVersion?: string;
+  scheduledGrayDate?: string;
+  scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
 };
@@ -68,7 +71,7 @@ export function releaseStatusOf(requirement: Pick<import("@/lib/types").Requirem
   // Requirements created before release status was introduced are already
   // published records. Keep them visible to the current-knowledge assistant;
   // newly created requirements explicitly set status to offline below.
-  return requirement.status === "offline" ? "offline" : "online";
+  return requirement.status === "offline" || requirement.status === "scheduled" ? requirement.status : "online";
 }
 
 function clone<T>(value: T): T {
@@ -138,12 +141,13 @@ async function snapshotFromEntries(entries: Array<{ path: string; data: Buffer }
 
 async function materializeSnapshotDemo(manifest: RequirementAssetManifest, projectCode: string, requirementCode: string, versionNo: number) {
   const demoFiles = manifest.files.filter((file) => file.path.startsWith("demo/"));
-  if (!demoFiles.some((file) => file.path === "demo/index.html")) throw new Error("需求资产必须包含 demo/index.html。");
+  const demoEntry = demoFiles.find((file) => file.path.toLowerCase() === "demo/index.html") ?? demoFiles.find((file) => /\.html?$/i.test(file.path));
+  if (!demoEntry) throw new Error("需求资产必须包含 demo/ 下的 HTML 文件。");
   safeSegment(projectCode, "项目编码"); safeSegment(requirementCode, "需求编码");
   const destination = path.join(PUBLISHED_DEMO_DIR, projectCode, requirementCode, `v${versionNo}`);
   const temporary = `${destination}.${randomUUID()}.tmp`;
-  for (const file of demoFiles) {
-    const relative = file.path.slice("demo/".length);
+  for (const file of manifest.files) {
+    const relative = file.path;
     const target = path.join(temporary, relative);
     if (!target.startsWith(`${temporary}${path.sep}`)) throw new Error("需求资产包含非法 Demo 路径。");
     await mkdir(path.dirname(target), { recursive: true });
@@ -151,7 +155,7 @@ async function materializeSnapshotDemo(manifest: RequirementAssetManifest, proje
   }
   await mkdir(path.dirname(destination), { recursive: true });
   await rename(temporary, destination);
-  return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/index.html`;
+  return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/${demoEntry.path}`;
 }
 
 async function parseSnapshotArchive(file: File) {
@@ -159,9 +163,20 @@ async function parseSnapshotArchive(file: File) {
   if (file.size <= 0 || file.size > MAX_SNAPSHOT_BYTES) throw new Error("需求资产 ZIP 必须大于 0 且不超过 50MB。");
   const archive = new AdmZip(Buffer.from(await file.arrayBuffer()));
   const entries = archive.getEntries().filter((entry) => !entry.isDirectory).map((entry) => ({ path: safeAssetPath(entry.entryName), data: entry.getData() }));
-  if (!entries.some((entry) => entry.path === "PRD.md")) throw new Error("需求资产 ZIP 根目录必须包含 PRD.md。");
-  if (!entries.some((entry) => entry.path === "demo/index.html")) throw new Error("需求资产 ZIP 必须包含 demo/index.html。");
+  const prdEntries = entries.filter((entry) => /(?:^|\/)prd\.(?:md|markdown)$/i.test(entry.path) || /^prd\/.+\.(?:md|markdown)$/i.test(entry.path) || /^PRD\.md$/i.test(entry.path));
+  if (!prdEntries.length) throw new Error("需求资产 ZIP 必须包含 PRD.md 或 prd/ 下的 Markdown 文件。");
+  if (!entries.some((entry) => entry.path.startsWith("demo/") && /\.html?$/i.test(entry.path))) throw new Error("需求资产 ZIP 必须包含 demo/ 下的 HTML 文件。");
   return entries;
+}
+
+function documentsForSnapshot(entries: Array<{ path: string; data: Buffer }>, projectCode: string, requirementCode: string, versionNo: number): RequirementDocument[] {
+  const prds = entries.filter((entry) => /^PRD\.md$/i.test(entry.path) || /^prd\/.+\.(?:md|markdown)$/i.test(entry.path)).toSorted((a, b) => a.path.localeCompare(b.path));
+  const demos = entries.filter((entry) => entry.path.startsWith("demo/") && /\.html?$/i.test(entry.path)).toSorted((a, b) => a.path.localeCompare(b.path));
+  const base = `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/`;
+  return [
+    ...prds.map((entry, index) => ({ id: `prd_${index}_${entry.path}`, name: path.posix.basename(entry.path), path: entry.path, kind: "prd" as const, mimeType: mimeType(entry.path), order: index, content: entry.data.toString("utf8"), url: `${base}${entry.path}` })),
+    ...demos.map((entry, index) => ({ id: `demo_${index}_${entry.path}`, name: path.posix.basename(entry.path), path: entry.path, kind: "demo" as const, mimeType: mimeType(entry.path), order: index, url: `${base}${entry.path}` })),
+  ];
 }
 
 async function writeStore(store: RequirementStore) {
@@ -217,7 +232,7 @@ async function ensureStore(): Promise<RequirementStore> {
   }
   let migrated = false;
   for (const requirement of store.requirements) {
-    if (requirement.status !== "online" && requirement.status !== "offline") {
+    if (requirement.status !== "online" && requirement.status !== "scheduled" && requirement.status !== "offline") {
       // Before release status existed, every stored requirement represented a
       // published PRD. Preserve that meaning during schema migration.
       requirement.status = "online";
@@ -456,12 +471,20 @@ function validReleaseDate(value: string) {
 
 export async function updateRequirementReleaseStatus(requirementCode: string, input: UpdateRequirementReleaseStatusInput) {
   const status = input.status;
-  if (status !== "offline" && status !== "online") throw new Error("需求状态无效。");
+  if (status !== "offline" && status !== "scheduled" && status !== "online") throw new Error("需求状态无效。");
+  const scheduleVersion = input.scheduleVersion?.trim() ?? "";
+  const scheduledGrayDate = input.scheduledGrayDate?.trim() ?? "";
+  const scheduledFullDate = input.scheduledFullDate?.trim() ?? "";
   const releaseVersion = input.releaseVersion?.trim() ?? "";
   const releaseDate = input.releaseDate?.trim() ?? "";
   if (status === "online") {
     if (!releaseVersion || releaseVersion.length > 80) throw new Error("上线版本不能为空且不能超过 80 个字符。");
     if (!validReleaseDate(releaseDate)) throw new Error("上线时间必须是有效日期。");
+  }
+  if (status === "scheduled") {
+    if (!scheduleVersion || scheduleVersion.length > 80) throw new Error("排期版本不能为空且不能超过 80 个字符。");
+    if (!validReleaseDate(scheduledGrayDate)) throw new Error("预计灰度时间必须是有效日期。");
+    if (!validReleaseDate(scheduledFullDate)) throw new Error("预计全量时间必须是有效日期。");
   }
   return mutate((store) => {
     const requirement = store.requirements.find((item) => item.code === requirementCode);
@@ -474,10 +497,18 @@ export async function updateRequirementReleaseStatus(requirementCode: string, in
       requirement.releaseVersion = releaseVersion;
       requirement.releaseDate = releaseDate;
     }
+    if (status === "scheduled") {
+      requirement.scheduleVersion = scheduleVersion;
+      requirement.scheduledGrayDate = scheduledGrayDate;
+      requirement.scheduledFullDate = scheduledFullDate;
+    }
     requirement.updatedAt = now();
     const summary = project.requirements.find((item) => item.code === requirementCode);
     if (summary) {
       summary.status = status;
+      summary.scheduleVersion = requirement.scheduleVersion;
+      summary.scheduledGrayDate = requirement.scheduledGrayDate;
+      summary.scheduledFullDate = requirement.scheduledFullDate;
       summary.releaseVersion = requirement.releaseVersion;
       summary.releaseDate = requirement.releaseDate;
       summary.updatedAt = requirement.updatedAt;
@@ -512,7 +543,8 @@ export async function searchRequirements(query: string) {
     const project = store.projects.find((item) => item.id === requirement.projectId);
     if (archived(requirement) || !project || archived(project)) return [];
     const currentVersion = store.versions.find((item) => item.id === requirement.currentVersionId);
-    const haystack = `${requirement.code} ${requirement.title} ${currentVersion?.prd ?? ""}`.toLowerCase();
+    const documentText = currentVersion?.documents?.filter((document) => document.kind === "prd").map((document) => document.content ?? "").join(" ") ?? currentVersion?.prd ?? "";
+    const haystack = `${requirement.code} ${requirement.title} ${documentText}`.toLowerCase();
     return haystack.includes(normalized) ? [{
       projectCode: project?.id,
       requirementCode: requirement.code,
@@ -520,6 +552,66 @@ export async function searchRequirements(query: string) {
       currentVersion: currentVersion?.number,
     }] : [];
   }));
+}
+
+/**
+ * Latest effective product knowledge only. This is deliberately separate from
+ * the legacy local retrieval helpers below: Dify is the assistant's only
+ * product-knowledge retriever, while this function is the platform fact source
+ * used for synchronization and post-retrieval permission checks.
+ */
+export type CurrentRequirementKnowledgeSource = {
+  projectId: string;
+  projectName: string;
+  requirementCode: string;
+  requirementName: string;
+  versionNo: number;
+  status: RequirementReleaseStatus;
+  scheduleVersion?: string;
+  scheduledGrayDate?: string;
+  scheduledFullDate?: string;
+  releaseVersion?: string;
+  releaseDate?: string;
+  sourceUpdatedAt: string;
+  changeSummary: string;
+  prdDocuments: Array<{ name: string; path: string; content: string }>;
+  testCases: RequirementTestCase[];
+};
+
+export async function listCurrentRequirementKnowledgeSources() {
+  const store = await ensureStore();
+  const sources = store.requirements.flatMap((requirement) => {
+    const project = store.projects.find((item) => item.id === requirement.projectId);
+    const version = store.versions.find((item) => item.id === requirement.currentVersionId);
+    if (!project || !version || archived(project) || archived(requirement)) return [];
+    return [{
+      projectId: project.id,
+      projectName: project.name,
+      requirementCode: requirement.code,
+      requirementName: requirement.title,
+      versionNo: version.number,
+      status: releaseStatusOf(requirement),
+      scheduleVersion: requirement.scheduleVersion,
+      scheduledGrayDate: requirement.scheduledGrayDate,
+      scheduledFullDate: requirement.scheduledFullDate,
+      releaseVersion: requirement.releaseVersion,
+      releaseDate: requirement.releaseDate,
+      sourceUpdatedAt: requirement.updatedAt || version.publishedAt,
+      changeSummary: version.changeSummary,
+      prdDocuments: prdDocumentsForVersion(version).map((document) => ({ name: document.name, path: document.path, content: document.content ?? "" })),
+      testCases: (store.testCases ?? []).filter((item) => item.requirementCode === requirement.code && item.versionNo === version.number),
+    } satisfies CurrentRequirementKnowledgeSource];
+  });
+  return clone(sources);
+}
+
+function prdDocumentsForVersion(version: RequirementVersion) {
+  const documents = version.documents?.filter((document) => document.kind === "prd" && document.content?.trim());
+  return documents?.length ? documents : [{ id: `${version.id}:prd`, name: "PRD.md", path: "PRD.md", kind: "prd" as const, mimeType: "text/markdown", order: 0, content: version.prd }];
+}
+
+function versionPrdText(version: RequirementVersion) {
+  return prdDocumentsForVersion(version).map((document) => `# 文件：${document.name}\n${document.content ?? ""}`).join("\n\n");
 }
 
 export type RequirementKnowledgeMatch = {
@@ -530,14 +622,21 @@ export type RequirementKnowledgeMatch = {
   projectId: string;
   projectName: string;
   section: string;
+  documentName?: string;
+  documentPath?: string;
   excerpt: string;
   demoEntryUrl: string;
   isHistorical: boolean;
-  releaseStatus: "online" | "offline";
+  releaseStatus: RequirementReleaseStatus;
+  scheduleVersion?: string;
+  scheduledGrayDate?: string;
+  scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
   testCases: Array<{ id: string; title: string; status: RequirementTestStatus; priority: RequirementTestCase["priority"]; module: string }>;
   matchedTerms: string[];
+  /** Program-generated keyword score; only used for retrieval fallback, never shown as a business fact. */
+  lexicalScore: number;
 };
 
 export type RequirementKnowledgeScope = "current-requirement" | "current-project" | "all-published";
@@ -548,6 +647,8 @@ export type ScopedRequirementKnowledgeInput = {
   projectId?: string;
   versionNo?: number;
   includeHistory?: boolean;
+  /** Include low-keyword sections so a configured semantic retriever can rank them. */
+  includeSemanticCandidates?: boolean;
   limit?: number;
 };
 export type RequirementReleaseFact = {
@@ -557,6 +658,9 @@ export type RequirementReleaseFact = {
   requirementName: string;
   versionNo: number;
   status: RequirementReleaseStatus;
+  scheduleVersion?: string;
+  scheduledGrayDate?: string;
+  scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
 };
@@ -617,7 +721,7 @@ function queryTerms(value: string) {
   })));
 }
 
-/** Small-team baseline retrieval: current published PRD text only, ranked before it reaches a model. */
+/** Small-team retrieval starts with current published PRD text and can expose semantic candidates on demand. */
 function isHistoryQuestion(question: string) {
   return /历史|以前|之前|旧版|老版本|v\s*\d+|版本.*区别|什么时候.*(?:加|改)|最近.*(?:修改|变更)/i.test(question);
 }
@@ -627,10 +731,12 @@ function projectContext(store: RequirementStore, project: Project) {
     .filter((item) => item.projectId === project.id && !archived(item))
     .map((item) => {
       const version = store.versions.find((candidate) => candidate.id === item.currentVersionId);
-      const sections = version ? prdSections(version.prd).slice(0, 4).map((section) => section.title).join("、") : "";
+      const sections = version ? prdDocumentsForVersion(version).flatMap((document) => prdSections(document.content ?? "").slice(0, 4).map((section) => section.title)).join("、") : "";
       const release = releaseStatusOf(item) === "online"
         ? `已上线${item.releaseVersion ? ` · ${item.releaseVersion}` : ""}${item.releaseDate ? ` · ${item.releaseDate}` : ""}`
-        : "未上线（规划中）";
+        : releaseStatusOf(item) === "scheduled"
+          ? `已排期${item.scheduleVersion ? ` · ${item.scheduleVersion}` : ""}${item.scheduledFullDate ? ` · 预计全量 ${item.scheduledFullDate}` : ""}`
+          : "未上线（规划中）";
       return `- ${item.code}《${item.title}》· ${release}${sections ? `：${sections}` : ""}`;
     });
   return [
@@ -665,6 +771,9 @@ export async function listScopedRequirementReleaseFacts(input: Omit<ScopedRequir
       requirementName: requirement.title,
       versionNo: version.number,
       status: releaseStatusOf(requirement),
+      scheduleVersion: requirement.scheduleVersion,
+      scheduledGrayDate: requirement.scheduledGrayDate,
+      scheduledFullDate: requirement.scheduledFullDate,
       releaseVersion: requirement.releaseVersion,
       releaseDate: requirement.releaseDate,
     }];
@@ -699,15 +808,15 @@ export async function findScopedRequirementKnowledge(input: ScopedRequirementKno
       : includeHistory
         ? store.versions.filter((version) => version.requirementCode === requirement.code)
         : store.versions.filter((version) => version.id === requirement.currentVersionId);
-    return versions.flatMap((version) => prdSections(version.prd).flatMap((section, sectionIndex) => {
+    return versions.flatMap((version) => prdDocumentsForVersion(version).flatMap((document) => prdSections(document.content ?? "").flatMap((section, sectionIndex) => {
       const fields = [requirement.code, requirement.title, project.name, version.changeSummary, section.title, section.text].map((value) => value.toLowerCase());
       const hits = terms.filter((term) => fields.some((field) => field.includes(term)));
       const exactCode = query.toLowerCase().includes(requirement.code.toLowerCase());
       const titleHits = terms.filter((term) => requirement.title.toLowerCase().includes(term)).length;
       const score = (exactCode ? 100 : 0) + titleHits * 10 + terms.filter((term) => section.title.toLowerCase().includes(term)).length * 7
         + terms.filter((term) => section.text.toLowerCase().includes(term)).length * 3 + (version.id === requirement.currentVersionId ? 2 : 0);
-      if (!hits.length && !broadQuestion) return [];
-      if (!broadQuestion && score < 3) return [];
+      if (!input.includeSemanticCandidates && !hits.length && !broadQuestion) return [];
+      if (!input.includeSemanticCandidates && !broadQuestion && score < 3) return [];
       return [{
         id: `${requirement.code}:v${version.number}:s${sectionIndex}`,
         requirementCode: requirement.code,
@@ -716,19 +825,24 @@ export async function findScopedRequirementKnowledge(input: ScopedRequirementKno
         projectId: project.id,
         projectName: project.name,
         section: section.title,
+        documentName: document.name,
+        documentPath: document.path,
         excerpt: relevantExcerpt(section.text, query, 1000),
         demoEntryUrl: version.demoEntryUrl,
         isHistorical: version.id !== requirement.currentVersionId,
         releaseStatus: releaseStatusOf(requirement),
+        scheduleVersion: requirement.scheduleVersion,
+        scheduledGrayDate: requirement.scheduledGrayDate,
+        scheduledFullDate: requirement.scheduledFullDate,
         releaseVersion: requirement.releaseVersion,
         releaseDate: requirement.releaseDate,
         testCases: (store.testCases ?? []).filter((item) => item.requirementCode === requirement.code && item.versionNo === version.number).slice(0, 12).map((item) => ({ id: item.id, title: item.title, status: item.status, priority: item.priority, module: item.module })),
         matchedTerms: hits.slice(0, 8),
-        score,
+        lexicalScore: score,
       }];
-    }));
-  }).toSorted((left, right) => right.score - left.score || left.requirementCode.localeCompare(right.requirementCode));
-  const limit = Math.max(1, Math.min(input.limit ?? 6, 8));
+    })));
+  }).toSorted((left, right) => right.lexicalScore - left.lexicalScore || left.requirementCode.localeCompare(right.requirementCode));
+  const limit = Math.max(1, Math.min(input.limit ?? 6, input.includeSemanticCandidates ? 24 : 8));
   const matches = ranked.slice(0, limit) as RequirementKnowledgeMatch[];
   const relatedRequirements = Array.from(new Map(matches
     .filter((match) => match.requirementCode !== input.requirementCode)
@@ -969,6 +1083,10 @@ export async function publishRequirement(input: PublishRequirementInput) {
       prd: prdMarkdown,
       demoEntryUrl,
       artifactId: artifact.id,
+      documents: [
+        { id: `${requirementCode}:v${number}:prd`, name: "PRD.md", path: "PRD.md", kind: "prd", mimeType: "text/markdown", order: 0, content: prdMarkdown },
+        { id: `${requirementCode}:v${number}:demo`, name: artifact.entryFile, path: artifact.entryFile, kind: "demo", mimeType: mimeType(artifact.entryFile), order: 0, url: demoEntryUrl },
+      ],
     };
     store.versions.push(version);
     requirement.title = title;
@@ -1022,7 +1140,7 @@ export async function publishRequirementSnapshot(input: PublishRequirementSnapsh
     if (archived(project) || archived(requirement)) throw new Error("已作废项目或需求不能发布新版本，请先恢复后再操作。");
     const number = store.versions.filter((item) => item.requirementCode === requirementCode).reduce((max, item) => Math.max(max, item.number), 0) + 1;
     const demoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);
-    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: input.actor?.name || "本地开发身份", changeSummary, prd, demoEntryUrl, artifactId: `snapshot_${randomUUID().replaceAll("-", "")}`, versionName: input.versionName?.trim().slice(0, 80) || undefined, assetManifest: manifest };
+    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: input.actor?.name || "本地开发身份", changeSummary, prd, demoEntryUrl, artifactId: `snapshot_${randomUUID().replaceAll("-", "")}`, versionName: input.versionName?.trim().slice(0, 80) || undefined, assetManifest: manifest, documents: documentsForSnapshot(entries, project.id, requirementCode, number) };
     store.versions.push(version);
     if (input.setCurrent !== false) {
       requirement.currentVersionId = version.id;
@@ -1058,7 +1176,8 @@ export async function restoreRequirementVersion(requirementCode: string, sourceV
     const manifest = await legacyManifest(store, source);
     const number = store.versions.filter((item) => item.requirementCode === requirementCode).reduce((max, item) => Math.max(max, item.number), 0) + 1;
     const demoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);
-    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: actor?.name || "本地开发身份", changeSummary: `从 V${sourceVersionNo} 恢复`, prd: source.prd, demoEntryUrl, artifactId: `restore_${source.id}`, sourceVersionNo, assetManifest: manifest };
+    const restoredEntries = await Promise.all(manifest.files.map(async (file) => ({ path: file.path, data: await readFile(path.join(ASSET_OBJECT_DIR, file.hash)) })));
+    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: actor?.name || "本地开发身份", changeSummary: `从 V${sourceVersionNo} 恢复`, prd: source.prd, demoEntryUrl, artifactId: `restore_${source.id}`, sourceVersionNo, assetManifest: manifest, documents: documentsForSnapshot(restoredEntries, project.id, requirementCode, number) };
     store.versions.push(version);
     requirement.currentVersionId = version.id;
     requirement.updatedAt = version.publishedAt;

@@ -1,6 +1,7 @@
 import { apiError, apiJson } from "@/lib/api-response";
 import { listVersions, publishRequirementSnapshot } from "@/services/requirement/repository";
 import { actorFromRequest, publisherFromRequest } from "@/services/auth/request-actor";
+import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +25,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ req
     const changeSummary = formData.get("change_summary");
     if (!(archive instanceof File)) throw new Error("请以 archive 字段上传需求资产 ZIP。");
     if (typeof changeSummary !== "string") throw new Error("change_summary 必填。");
-    return apiJson(await publishRequirementSnapshot({ requirementCode, archive, changeSummary, versionName: typeof formData.get("version_name") === "string" ? String(formData.get("version_name")) : undefined, setCurrent: formData.get("set_current") !== "false", actor }), { status: 201 });
+    const published = await publishRequirementSnapshot({ requirementCode, archive, changeSummary, versionName: typeof formData.get("version_name") === "string" ? String(formData.get("version_name")) : undefined, setCurrent: formData.get("set_current") !== "false", actor });
+    scheduleRequirementKnowledgeSync(requirementCode);
+    return apiJson(published, { status: 201 });
   } catch (error) {
     return apiError(error);
   }

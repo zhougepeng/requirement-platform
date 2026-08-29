@@ -14,10 +14,23 @@ type StoredModel = {
   name: string;
   baseUrl: string;
   model: string;
+  /** Optional OpenAI-compatible embedding model used to improve PRD retrieval. */
+  embeddingModel?: string;
+  reasoningEffort?: ReasoningEffort;
   apiKey: string;
   isDefault: boolean;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ReasoningEffort = "low" | "medium" | "high";
+
+type ResolvedAssistantModel = {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  embeddingModel?: string;
+  reasoningEffort?: ReasoningEffort;
 };
 
 type ModelStore = { schemaVersion: 1; models: StoredModel[] };
@@ -35,8 +48,8 @@ class ModelConnectionError extends Error {
 }
 
 export type ModelSummary = Omit<StoredModel, "apiKey"> & { hasApiKey: boolean };
-export type CreateModelInput = { name: string; baseUrl: string; model: string; apiKey: string; isDefault?: boolean };
-export type UpdateModelInput = { id: string; name?: string; baseUrl?: string; model?: string; apiKey?: string; isDefault?: boolean };
+export type CreateModelInput = { name: string; baseUrl: string; model: string; embeddingModel?: string; reasoningEffort?: ReasoningEffort; apiKey: string; isDefault?: boolean };
+export type UpdateModelInput = { id: string; name?: string; baseUrl?: string; model?: string; embeddingModel?: string | null; reasoningEffort?: ReasoningEffort | null; apiKey?: string; isDefault?: boolean };
 
 let mutationQueue = Promise.resolve();
 
@@ -59,11 +72,13 @@ function normalizeBaseUrl(value: string) {
 function validate(input: CreateModelInput) {
   const name = input.name.trim();
   const model = input.model.trim();
+  const embeddingModel = input.embeddingModel?.trim();
   const apiKey = input.apiKey.trim();
   if (!name || name.length > 80) throw new Error("模型名称不能为空且不能超过 80 个字符。");
   if (!model || model.length > 160) throw new Error("模型 ID 不能为空且不能超过 160 个字符。");
   if (!apiKey || apiKey.length > 2000) throw new Error("API Key 不能为空且不能超过 2000 个字符。");
-  return { name, model, apiKey, baseUrl: normalizeBaseUrl(input.baseUrl) };
+  if (embeddingModel && embeddingModel.length > 160) throw new Error("向量模型 ID 不能超过 160 个字符。");
+  return { name, model, embeddingModel: embeddingModel || undefined, reasoningEffort: input.reasoningEffort, apiKey, baseUrl: normalizeBaseUrl(input.baseUrl) };
 }
 
 async function readStore(): Promise<ModelStore> {
@@ -114,6 +129,8 @@ function summary(model: StoredModel): ModelSummary {
     name: model.name,
     baseUrl: model.baseUrl,
     model: model.model,
+    embeddingModel: model.embeddingModel,
+    reasoningEffort: model.reasoningEffort,
     isDefault: model.isDefault,
     createdAt: model.createdAt,
     updatedAt: model.updatedAt,
@@ -146,6 +163,8 @@ export async function updateModel(input: UpdateModelInput) {
       name: input.name ?? target.name,
       baseUrl: input.baseUrl ?? target.baseUrl,
       model: input.model ?? target.model,
+      embeddingModel: input.embeddingModel === undefined ? target.embeddingModel : input.embeddingModel ?? "",
+      reasoningEffort: input.reasoningEffort === undefined ? target.reasoningEffort : input.reasoningEffort ?? undefined,
       apiKey: input.apiKey?.trim() ? input.apiKey : target.apiKey,
     };
     const value = validate(candidate);
@@ -166,27 +185,45 @@ export async function deleteModel(id: string) {
   });
 }
 
-export async function resolveAssistantModel() {
+export async function resolveAssistantModel(): Promise<ResolvedAssistantModel> {
   const store = await readStore();
   const configured = store.models.find((item) => item.isDefault) ?? store.models[0];
-  if (configured) return { baseUrl: configured.baseUrl, apiKey: configured.apiKey, model: configured.model };
+  if (configured) return { baseUrl: configured.baseUrl, apiKey: configured.apiKey, model: configured.model, embeddingModel: configured.embeddingModel, reasoningEffort: configured.reasoningEffort };
   const baseUrl = process.env.AI_API_BASE_URL?.replace(/\/$/, "");
   const apiKey = process.env.AI_API_KEY;
   const model = process.env.AI_MODEL;
   if (!baseUrl || !apiKey || !model) throw new Error("AI 助手尚未配置。请从左侧栏底部的模型管理中新增并设为默认模型。");
-  return { baseUrl, apiKey, model };
+  const configuredReasoningEffort = process.env.AI_REASONING_EFFORT?.trim();
+  const reasoningEffort: ReasoningEffort | undefined = configuredReasoningEffort === "low" || configuredReasoningEffort === "medium" || configuredReasoningEffort === "high" ? configuredReasoningEffort : undefined;
+  return { baseUrl, apiKey, model, embeddingModel: process.env.AI_EMBEDDING_MODEL?.trim() || undefined, reasoningEffort };
+}
+
+/** OpenAI-compatible providers ignore this option when omitted; auto keeps the current behavior. */
+export function reasoningEffortPayload(reasoningEffort?: ReasoningEffort) {
+  return reasoningEffort ? { reasoning_effort: reasoningEffort } : {};
+}
+
+/**
+ * Vector retrieval is optional: a missing embedding model never prevents the
+ * assistant from answering. The semantic reranker remains available as a
+ * lightweight fallback for existing model configurations.
+ */
+export async function resolveAssistantEmbeddingModel() {
+  const configured = await resolveAssistantModel();
+  if (!configured.embeddingModel) return undefined;
+  return { baseUrl: configured.baseUrl, apiKey: configured.apiKey, model: configured.embeddingModel };
 }
 
 /** A short, read-only model probe used before expensive assistant/test-case requests. */
 export async function testAssistantModelConnection() {
-  const { baseUrl, apiKey, model } = await resolveAssistantModel();
+  const { baseUrl, apiKey, model, reasoningEffort } = await resolveAssistantModel();
   const startedAt = Date.now();
   let response: Response;
   try {
     response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, temperature: 0, messages: [{ role: "user", content: "仅回复 OK" }] }),
+      body: JSON.stringify({ model, temperature: 0, ...reasoningEffortPayload(reasoningEffort), messages: [{ role: "user", content: "仅回复 OK" }] }),
       cache: "no-store",
       signal: AbortSignal.timeout(10_000),
     });

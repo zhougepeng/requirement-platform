@@ -10,10 +10,12 @@ const modelSchema = z.object({
   name: z.string().trim().min(1).max(80),
   baseUrl: z.string().trim().min(1).max(500),
   model: z.string().trim().min(1).max(160),
+  embeddingModel: z.string().trim().max(160).optional(),
+  reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
   apiKey: z.string().trim().min(1).max(2000),
   isDefault: z.boolean().optional(),
 });
-const updateSchema = modelSchema.partial().extend({ id: z.string().trim().min(6).max(100) });
+const updateSchema = modelSchema.partial().extend({ id: z.string().trim().min(6).max(100), embeddingModel: z.string().trim().max(160).nullable().optional(), reasoningEffort: z.enum(["low", "medium", "high"]).nullable().optional() });
 const deleteSchema = z.object({ id: z.string().trim().min(6).max(100) });
 
 export async function GET(request: Request) {

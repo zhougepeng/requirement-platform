@@ -15,6 +15,12 @@ type ContactScope = { authed_departments?: Array<{ open_department_id?: string; 
 type User = { open_id?: string; user_id?: string; name?: string; avatar?: { avatar_origin?: string; avatar_72?: string }; avatar_url?: string; tenant_key?: string; status?: { is_active?: boolean }; active?: boolean };
 
 export type FeishuEmployee = { openId: string; name: string; avatarUrl?: string; tenantKey?: string; departmentNames: string[]; directoryActive: boolean };
+export type FeishuNotificationDepartment = {
+  id: string;
+  idType: DepartmentIdType;
+  name: string;
+  path: string[];
+};
 export type FeishuDirectorySnapshot = {
   employees: FeishuEmployee[];
   /** 部门数包含根节点，用于在管理界面解释本次同步的可见范围。 */
@@ -183,4 +189,31 @@ export async function fetchFeishuEmployees() {
       fallbackDepartmentCount,
     },
   } satisfies FeishuDirectorySnapshot;
+}
+
+/** Lists only departments visible to this app. It never expands the app's Feishu authorization scope. */
+export async function listFeishuNotificationDepartments(): Promise<FeishuNotificationDepartment[]> {
+  const token = await getTenantAccessToken();
+  const roots = await fetchContactScopeRoots(token);
+  const departments: DepartmentNode[] = (roots.length ? roots : [{ id: "0", idType: "department_id" as const, name: "组织架构" }])
+    .map((department) => ({ ...department, path: [department.name] }));
+  for (let index = 0; index < departments.length; index += 1) {
+    const parent = departments[index];
+    for (const child of await listDirectChildren(token, parent.id, parent.idType)) {
+      departments.push({ ...child, idType: parent.idType, path: [...parent.path, child.name] });
+    }
+    if (departments.length > MAX_ITEMS) throw new Error("飞书组织架构超过 10000 个部门，已停止读取。");
+  }
+  return Array.from(new Map(departments.map((item) => [`${item.idType}:${item.id}`, item])).values())
+    .map((item) => ({ id: item.id, idType: item.idType, name: item.name, path: item.path }));
+}
+
+/** Resolves active Feishu users in one selected department at send time. */
+export async function listFeishuDepartmentMemberOpenIds(departmentId: string, idType: DepartmentIdType) {
+  const token = await getTenantAccessToken();
+  const users = await listDepartmentUsers(token, departmentId, idType);
+  return Array.from(new Set(users.flatMap((item) => {
+    const openId = item.open_id ?? item.user_id;
+    return openId && item.active !== false && item.status?.is_active !== false ? [openId] : [];
+  })));
 }

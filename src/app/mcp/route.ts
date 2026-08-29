@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { addComment, getProject, getRequirementDetail, getVersion, listComments, listProjectRequirements, listProjects, listVersions, publishRequirement, searchRequirements } from "@/services/requirement/repository";
+import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,15 +38,19 @@ function createServer() {
     prd_markdown: z.string().min(1).max(100_000),
     demo_artifact_id: z.string().min(1),
     change_summary: z.string().min(1).max(1000),
-  } }, async ({ project_code, requirement_code, title, prd_markdown, demo_artifact_id, change_summary }) => text(await publishRequirement({
-    projectCode: project_code,
-    requirementCode: requirement_code,
-    title,
-    prdMarkdown: prd_markdown,
-    artifactId: demo_artifact_id,
-    changeSummary: change_summary,
-    actor: { id: "mcp-service", name: "Requirement MCP" },
-  })));
+  } }, async ({ project_code, requirement_code, title, prd_markdown, demo_artifact_id, change_summary }) => {
+    const published = await publishRequirement({
+      projectCode: project_code,
+      requirementCode: requirement_code,
+      title,
+      prdMarkdown: prd_markdown,
+      artifactId: demo_artifact_id,
+      changeSummary: change_summary,
+      actor: { id: "mcp-service", name: "Requirement MCP" },
+    });
+    scheduleRequirementKnowledgeSync(published.requirement.code);
+    return text(published);
+  });
   server.registerTool("list_comments", { description: "读取某版本的评论", inputSchema: { requirement_code: z.string().min(2), version_id: z.string().optional() } }, async ({ requirement_code, version_id }) => text(await listComments(requirement_code, version_id)));
   return server;
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DemoFrame } from "@/components/demo-frame";
 import { ModelManager } from "@/components/model-manager";
+import { DifyKnowledgeSettings } from "@/components/dify-knowledge-settings";
 import { EmployeeManager } from "@/components/employee-manager";
 import { GithubUpdateManager } from "@/components/github-update-manager";
 import { RequirementAssistant } from "@/components/requirement-assistant";
@@ -14,6 +15,7 @@ import { Icon } from "@/components/icons";
 import { RequirementMarkdown } from "@/components/requirement-markdown";
 import { RequirementGapsPanel } from "@/components/requirement-gaps-panel";
 import { TestCasesPanel } from "@/components/test-cases-panel";
+import { VersionDocumentDirectory } from "@/components/version-document-directory";
 import { WaitingAuthorization } from "@/components/waiting-authorization";
 import {
   RequirementReleaseStatus,
@@ -23,12 +25,13 @@ import type {
   Project,
   RequirementComment,
   RequirementDetail,
+  RequirementDocument,
   RequirementSummary,
   RequirementVersion,
 } from "@/lib/types";
 
 type Tab = "demo" | "prd" | "split" | "test-cases" | "versions";
-type View = "detail" | "projects" | "requirements";
+type View = "board" | "detail" | "projects" | "requirements";
 type ApiResponse<T> =
   { data: T; error?: never } | { data?: never; error: string };
 type CurrentUser = {
@@ -337,6 +340,241 @@ function ProjectDirectory({
   );
 }
 
+function RequirementBoard({
+  projects,
+  onOpenProject,
+}: {
+  projects: Project[];
+  onOpenProject: (project: Project) => void;
+}) {
+  const overview = useMemo(() => {
+    const requirements = projects.flatMap((project) => project.requirements);
+    const online = requirements.filter(
+      (requirement) => requirement.status === "online",
+    ).length;
+    const scheduled = requirements.filter(
+      (requirement) => requirement.status === "scheduled",
+    ).length;
+    const ongoingProjects = projects.filter((project) =>
+      project.requirements.some((requirement) => requirement.status !== "online"),
+    ).length;
+    return {
+      projects: projects.length,
+      ongoingProjects,
+      requirements: requirements.length,
+      online,
+      scheduled,
+      offline: requirements.length - online - scheduled,
+    };
+  }, [projects]);
+  const ownerRows = useMemo(() => {
+    const rows = new Map<string, { total: number; online: number; scheduled: number }>();
+    for (const project of projects) {
+      for (const requirement of project.requirements) {
+        const owner = requirement.owner ?? project.owner ?? "未分配";
+        const current = rows.get(owner) ?? { total: 0, online: 0, scheduled: 0 };
+        current.total += 1;
+        if (requirement.status === "online") current.online += 1;
+        if (requirement.status === "scheduled") current.scheduled += 1;
+        rows.set(owner, current);
+      }
+    }
+    return Array.from(rows, ([owner, counts]) => ({
+      owner,
+      ...counts,
+      offline: counts.total - counts.online - counts.scheduled,
+    })).toSorted((a, b) => b.total - a.total || a.owner.localeCompare(b.owner));
+  }, [projects]);
+  const monthlyReleases = useMemo(() => {
+    const currentDate = new Date();
+    const buckets = Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(
+        currentDate.getFullYear(),
+        currentDate.getMonth() - (11 - index),
+        1,
+      );
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      return {
+        key,
+        label: `${date.getMonth() + 1}月`,
+        items: [] as Array<{ projectName: string; requirementName: string }>,
+      };
+    });
+    const byMonth = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+    for (const project of projects) {
+      for (const requirement of project.requirements) {
+        const month = requirement.releaseDate?.slice(0, 7);
+        if (requirement.status !== "online" || !month) continue;
+        byMonth.get(month)?.items.push({
+          projectName: project.name,
+          requirementName: requirement.title,
+        });
+      }
+    }
+    return buckets;
+  }, [projects]);
+
+  return (
+    <div className="requirement-board">
+      <div className="board-overview">
+        <div className="board-metric is-projects">
+          <span className="board-metric-icon"><Icon name="folder" /></span>
+          <div><small>项目总数</small><b>{overview.projects}</b></div>
+        </div>
+        <div className="board-metric is-ongoing">
+          <span className="board-metric-icon"><Icon name="file" /></span>
+          <div><small>进行中项目</small><b>{overview.ongoingProjects}</b></div>
+        </div>
+        <div className="board-metric is-requirements">
+          <span className="board-metric-icon"><Icon name="file" /></span>
+          <div><small>需求总数</small><b>{overview.requirements}</b></div>
+        </div>
+        <div className="board-metric is-online">
+          <span className="board-metric-icon"><Icon name="check" /></span>
+          <div><small>已上线</small><b>{overview.online}</b></div>
+        </div>
+        <div className="board-metric is-scheduled">
+          <span className="board-metric-icon"><Icon name="file" /></span>
+          <div><small>已排期</small><b>{overview.scheduled}</b></div>
+        </div>
+        <div className="board-metric is-offline">
+          <span className="board-metric-icon"><Icon name="file" /></span>
+          <div><small>未上线</small><b>{overview.offline}</b></div>
+        </div>
+      </div>
+      <MonthlyReleaseChart months={monthlyReleases} />
+      <div className="board-project-grid">
+        {projects.map((project) => {
+          const total = project.requirements.length;
+          const online = project.requirements.filter(
+            (requirement) => requirement.status === "online",
+          ).length;
+          const scheduled = project.requirements.filter(
+            (requirement) => requirement.status === "scheduled",
+          ).length;
+          const offline = total - online - scheduled;
+          const ongoing = scheduled > 0 || offline > 0;
+          return (
+            <button
+              key={project.id}
+              className="board-project-card"
+              onClick={() => onOpenProject(project)}
+            >
+              <span className="board-project-icon"><Icon name="folder" /></span>
+              <span className="board-project-title">
+                <b>{project.name}</b>
+                <small><em className={`board-project-status ${ongoing ? "is-ongoing" : "is-complete"}`}>{ongoing ? "进行中" : "已全部上线"}</em></small>
+              </span>
+              <span className="board-project-counts">
+                <span><small>需求数</small><b>{total}</b></span>
+                <span><small>已上线</small><b className="is-online">{online}</b></span>
+                <span><small>已排期</small><b className="is-scheduled">{scheduled}</b></span>
+                <span><small>未上线</small><b className="is-offline">{offline}</b></span>
+              </span>
+              <Icon name="chevron" />
+            </button>
+          );
+        })}
+      </div>
+      <BoardOwnerTable rows={ownerRows} />
+    </div>
+  );
+}
+
+function MonthlyReleaseChart({
+  months,
+}: {
+  months: Array<{
+    key: string;
+    label: string;
+    items: Array<{ projectName: string; requirementName: string }>;
+  }>;
+}) {
+  const [activeMonth, setActiveMonth] = useState<string | null>(null);
+  const maxCount = Math.max(1, ...months.map((month) => month.items.length));
+  return (
+    <section className="monthly-release-chart">
+      <header>
+        <div><Icon name="file" /><b>近 12 个月上线情况</b></div>
+        <small>悬停柱状图查看上线需求</small>
+      </header>
+      <div className="monthly-release-bars">
+        {months.map((month) => {
+          const count = month.items.length;
+          const groupedItems = new Map<
+            string,
+            Array<{ projectName: string; requirementName: string }>
+          >();
+          for (const item of month.items) {
+            const items = groupedItems.get(item.projectName) ?? [];
+            items.push(item);
+            groupedItems.set(item.projectName, items);
+          }
+          return (
+            <div className="monthly-release-column" key={month.key}>
+              <div className="monthly-release-track">
+                <button
+                  className={`monthly-release-bar ${count ? "has-data" : ""}`}
+                  style={{ height: `${Math.max(4, (count / maxCount) * 100)}%` }}
+                  onMouseEnter={() => setActiveMonth(month.key)}
+                  onMouseLeave={() => setActiveMonth(null)}
+                  onFocus={() => setActiveMonth(month.key)}
+                  onBlur={() => setActiveMonth(null)}
+                  aria-label={`${month.key} 已上线 ${count} 个需求`}
+                >
+                  {count ? <span>{count}</span> : null}
+                </button>
+                {activeMonth === month.key ? (
+                  <div className="monthly-release-tooltip" role="tooltip">
+                    <b>{month.key} · 已上线 {count} 个需求</b>
+                    {count ? (
+                      Array.from(groupedItems, ([projectName, items]) => (
+                        <div key={projectName}>
+                          <strong>{projectName}</strong>
+                          <ul>{items.map((item) => <li key={`${projectName}-${item.requirementName}`}>{item.requirementName}</li>)}</ul>
+                        </div>
+                      ))
+                    ) : <span>当月暂无上线需求</span>}
+                  </div>
+                ) : null}
+              </div>
+              <small>{month.label}</small>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function BoardOwnerTable({
+  rows,
+}: {
+  rows: Array<{ owner: string; total: number; online: number; scheduled: number; offline: number }>;
+}) {
+  return (
+    <section className="board-owner-table">
+      <header>
+        <div><Icon name="users" /><b>负责人汇总</b></div>
+      </header>
+      {rows.length ? (
+        <div className="board-owner-grid">
+          <div className="board-owner-row board-owner-head"><span>负责人</span><span>需求数</span><span>已上线</span><span>已排期</span><span>未上线</span></div>
+          {rows.map((row) => (
+            <div className="board-owner-row" key={row.owner}>
+              <span><i>{row.owner.slice(0, 1)}</i>{row.owner}</span>
+              <b>{row.total}</b>
+              <b className="is-online">{row.online}</b>
+              <b className="is-scheduled">{row.scheduled}</b>
+              <b className="is-offline">{row.offline}</b>
+            </div>
+          ))}
+        </div>
+      ) : <p>暂无负责人数据</p>}
+    </section>
+  );
+}
+
 function RequirementList({
   project,
   requirements,
@@ -357,7 +595,7 @@ function RequirementList({
 }) {
   const [query, setQuery] = useState("");
   const [releaseFilter, setReleaseFilter] = useState<
-    "all" | "offline" | "online"
+    "all" | "offline" | "scheduled" | "online"
   >("all");
   const visibleRequirements = requirements.filter(
     (item) =>
@@ -402,6 +640,7 @@ function RequirementList({
             >
               <option value="all">全部</option>
               <option value="offline">未上线</option>
+              <option value="scheduled">已排期</option>
               <option value="online">已上线</option>
             </select>
           </label>
@@ -444,6 +683,8 @@ function RequirementList({
                 <span className="requirement-status-cell">
                   <RequirementReleaseStatus
                     requirement={item}
+                    requirementCode={item.code}
+                    projectId={project.id}
                     canEdit={
                       canManageRequirements &&
                       !project.archivedAt &&
@@ -505,7 +746,7 @@ export function RequirementWorkspace({
   startInDetail?: boolean;
   forceWaitingAuthorization?: boolean;
 }) {
-  const [view, setView] = useState<View>(startInDetail ? "detail" : "projects");
+  const [view, setView] = useState<View>(startInDetail ? "detail" : "board");
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectRequirements, setProjectRequirements] = useState<
     RequirementSummary[]
@@ -515,6 +756,8 @@ export function RequirementWorkspace({
   const [detail, setDetail] = useState<RequirementDetail | null>(null);
   const [versions, setVersions] = useState<RequirementVersion[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [selectedPrdDocumentId, setSelectedPrdDocumentId] = useState("");
+  const [selectedDemoDocumentId, setSelectedDemoDocumentId] = useState("");
   const [comments, setComments] = useState<RequirementComment[]>([]);
   const [currentUser, setCurrentUser] = useState<CurrentUser>({
     name: "本地开发身份",
@@ -531,6 +774,7 @@ export function RequirementWorkspace({
   const [showArchived, setShowArchived] = useState(false);
   const [employeeManagerRequest, setEmployeeManagerRequest] = useState(0);
   const [modelManagerRequest, setModelManagerRequest] = useState(0);
+  const [difySettingsRequest, setDifySettingsRequest] = useState(0);
   const [githubUpdateRequest, setGithubUpdateRequest] = useState(0);
   const [publishOpen, setPublishOpen] = useState(false);
   const [snapshotPublishOpen, setSnapshotPublishOpen] = useState(false);
@@ -538,6 +782,11 @@ export function RequirementWorkspace({
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [projectDialogSession, setProjectDialogSession] = useState(0);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const selectVersion = useCallback((versionId: string) => {
+    setSelectedVersionId(versionId);
+    setSelectedPrdDocumentId("");
+    setSelectedDemoDocumentId("");
+  }, []);
 
   const selectedVersion = useMemo(
     () =>
@@ -545,6 +794,47 @@ export function RequirementWorkspace({
       versions[0],
     [selectedVersionId, versions],
   );
+  const prdDocuments = useMemo<RequirementDocument[]>(() => {
+    if (!selectedVersion) return [];
+    const documents = (selectedVersion.documents ?? [])
+      .filter((document) => document.kind === "prd")
+      .toSorted(
+        (a, b) => a.order - b.order || a.name.localeCompare(b.name),
+      );
+    if (documents.length) return documents;
+    return [{
+      id: `${selectedVersion.id}:legacy-prd`,
+      name: "PRD.md",
+      path: "PRD.md",
+      kind: "prd",
+      mimeType: "text/markdown",
+      order: 0,
+      content: selectedVersion.prd,
+    }];
+  }, [selectedVersion]);
+  const demoDocuments = useMemo<RequirementDocument[]>(() => {
+    if (!selectedVersion) return [];
+    const documents = (selectedVersion.documents ?? [])
+      .filter((document) => document.kind === "demo")
+      .toSorted(
+        (a, b) => a.order - b.order || a.name.localeCompare(b.name),
+      );
+    if (documents.length) return documents;
+    return [{
+      id: `${selectedVersion.id}:legacy-demo`,
+      name: "index.html",
+      path: "demo/index.html",
+      kind: "demo",
+      mimeType: "text/html",
+      order: 0,
+      url: selectedVersion.demoEntryUrl,
+    }];
+  }, [selectedVersion]);
+  const selectedPrdDocument = prdDocuments.find((document) => document.id === selectedPrdDocumentId) ?? prdDocuments[0];
+  const selectedDemoDocument = demoDocuments.find((document) => document.id === selectedDemoDocumentId) ?? demoDocuments[0];
+  const selectedPrdSource = selectedPrdDocument?.content ?? selectedVersion?.prd ?? "";
+  const selectedPrdAssetBaseUrl = selectedPrdDocument?.url;
+  const selectedDemoUrl = selectedDemoDocument?.url ?? selectedVersion?.demoEntryUrl ?? "";
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ??
     detail?.project ??
@@ -656,7 +946,7 @@ export function RequirementWorkspace({
         setDetail(nextDetail);
         setVersions(nextVersions);
         setComments(nextComments);
-        setSelectedVersionId(
+        selectVersion(
           nextVersions.find((version) => version.number === versionNumber)
             ?.id ?? nextDetail.currentVersion.id,
         );
@@ -671,7 +961,7 @@ export function RequirementWorkspace({
         setLoading(false);
       }
     },
-    [],
+    [selectVersion],
   );
 
   useEffect(() => {
@@ -691,13 +981,13 @@ export function RequirementWorkspace({
           setVersions(result.versions);
           setComments(result.comments);
           setActiveProjectId(result.detail.project.id);
-          setSelectedVersionId(
+          selectVersion(
             result.versions.find(
               (version) => version.number === initialVersionNumber,
             )?.id ?? result.detail.currentVersion.id,
           );
         } else {
-          setView("projects");
+          setView("board");
         }
         setLoading(false);
       })
@@ -707,7 +997,7 @@ export function RequirementWorkspace({
         );
         setLoading(false);
       });
-  }, [initialRequirementCode, initialVersionNumber, startInDetail]);
+  }, [initialRequirementCode, initialVersionNumber, selectVersion, startInDetail]);
 
   async function addComment(content: string) {
     if (!detail || !selectedVersion) return;
@@ -975,7 +1265,7 @@ export function RequirementWorkspace({
         <div className="error-state">
           <b>无法打开需求</b>
           <span>{error || "需求数据不完整。"}</span>
-          <button onClick={() => setView("projects")}>返回项目目录</button>
+          <button onClick={() => setView("board")}>返回需求看板</button>
         </div>
       </main>
     );
@@ -988,7 +1278,7 @@ export function RequirementWorkspace({
       {view !== "detail" ? (
         <aside className="sidebar">
           <div className="sidebar-brand-row">
-            <button className="brand" onClick={() => setView("projects")}>
+            <button className="brand" onClick={() => setView("board")}>
               <span className="brand-mark">
                 <Icon name="book" />
               </span>
@@ -996,6 +1286,13 @@ export function RequirementWorkspace({
             </button>
           </div>
           <nav className="sidebar-nav">
+            <button
+              className={`nav-item ${view === "board" ? "is-selected" : ""}`}
+              onClick={() => setView("board")}
+            >
+              <Icon name="book" />
+              <span>需求看板</span>
+            </button>
             <div className="nav-caption nav-caption-with-action">
               <span>我的项目</span>
             </div>
@@ -1062,6 +1359,13 @@ export function RequirementWorkspace({
                 hideTrigger
                 initialOpen={modelManagerRequest > 0}
                 onClose={() => setModelManagerRequest(0)}
+              />
+            ) : null}
+            {currentUser.isAdmin ? (
+              <DifyKnowledgeSettings
+                key={`dify-${difySettingsRequest}`}
+                initialOpen={difySettingsRequest > 0}
+                onClose={() => setDifySettingsRequest(0)}
               />
             ) : null}
             {currentUser.isAdmin ? (
@@ -1156,6 +1460,15 @@ export function RequirementWorkspace({
                           role="menuitem"
                           onClick={() => {
                             setProfileMenuOpen(false);
+                            setDifySettingsRequest((current) => current + 1);
+                          }}
+                        >
+                          Dify 知识库
+                        </button>
+                        <button
+                          role="menuitem"
+                          onClick={() => {
+                            setProfileMenuOpen(false);
                             setGithubUpdateRequest((current) => current + 1);
                           }}
                         >
@@ -1183,7 +1496,15 @@ export function RequirementWorkspace({
       <main
         className={`main-panel ${view === "detail" && tab === "demo" ? "is-demo-view" : ""}`}
       >
-        {view === "projects" || (view === "requirements" && !activeProject) ? (
+        {view === "board" ? (
+          <RequirementBoard
+            projects={projects}
+            onOpenProject={(project) => {
+              setActiveProjectId(project.id);
+              setView("requirements");
+            }}
+          />
+        ) : view === "projects" || (view === "requirements" && !activeProject) ? (
           <ProjectDirectory
             projects={projects}
             activeProjectId={activeProject?.id ?? ""}
@@ -1236,6 +1557,8 @@ export function RequirementWorkspace({
                   </h1>
                   <RequirementReleaseStatus
                     requirement={detail!.requirement}
+                    requirementCode={detail!.requirement.code}
+                    projectId={detail!.project.id}
                     canEdit={
                       currentUser.canPublish &&
                       !detail!.requirement.archivedAt &&
@@ -1293,20 +1616,6 @@ export function RequirementWorkspace({
                   </button>
                 </div>
                 <div className="header-actions">
-                  <RequirementAssistant
-                    key={`assistant-${detail!.requirement.code}-${selectedVersion!.number}`}
-                    context={{
-                      kind: "requirement",
-                      projectId: detail!.project.id,
-                      projectName: detail!.project.name,
-                      requirementCode: detail!.requirement.code,
-                      requirementTitle: detail!.requirement.title,
-                      versionNo: selectedVersion!.number,
-                    }}
-                    onOpenRequirement={(requirementCode, versionNo) =>
-                      void loadRequirement(requirementCode, versionNo)
-                    }
-                  />
                   {currentUser.canPublish && !detail!.project.archivedAt ? (
                     <button
                       className={`icon-button detail-archive-button ${detail!.requirement.archivedAt ? "is-restore" : ""}`}
@@ -1344,9 +1653,7 @@ export function RequirementWorkspace({
                     <span className="sr-only">选择版本</span>
                     <select
                       value={selectedVersion!.id}
-                      onChange={(event) =>
-                        setSelectedVersionId(event.target.value)
-                      }
+                      onChange={(event) => selectVersion(event.target.value)}
                     >
                       {versions.map((version) => (
                         <option key={version.id} value={version.id}>
@@ -1378,7 +1685,7 @@ export function RequirementWorkspace({
                 versions={versions}
                 selected={selectedVersion!}
                 canPublish={currentUser.canPublish}
-                onSelect={setSelectedVersionId}
+                onSelect={selectVersion}
                 onRestore={(version) => void restoreVersion(version)}
               />
             ) : tab === "test-cases" ? (
@@ -1395,10 +1702,21 @@ export function RequirementWorkspace({
                 }}
               >
                 <div className="split-demo-pane">
-                  <DemoFrame
-                    viewport="desktop"
-                    src={selectedVersion!.demoEntryUrl}
-                  />
+                  {demoDocuments.length > 1 ? (
+                    <div className="document-browser is-demo is-split-pane">
+                      <VersionDocumentDirectory
+                        documents={demoDocuments}
+                        selectedId={selectedDemoDocument?.id ?? ""}
+                        onSelect={setSelectedDemoDocumentId}
+                        label="Demo 文件"
+                      />
+                      <div className="document-browser-content">
+                        <DemoFrame viewport="desktop" src={selectedDemoUrl} />
+                      </div>
+                    </div>
+                  ) : (
+                    <DemoFrame viewport="desktop" src={selectedDemoUrl} />
+                  )}
                 </div>
                 <div
                   className="split-divider"
@@ -1413,26 +1731,72 @@ export function RequirementWorkspace({
                     setDraggingSplit(true);
                   }}
                 />
-                <RequirementMarkdown
-                  className="split-prd-pane"
-                  source={selectedVersion!.prd}
-                  demoEntryUrl={selectedVersion!.demoEntryUrl}
-                />
+                {prdDocuments.length > 1 ? (
+                  <div className="document-browser is-prd is-split-pane">
+                    <VersionDocumentDirectory
+                      documents={prdDocuments}
+                      selectedId={selectedPrdDocument?.id ?? ""}
+                      onSelect={setSelectedPrdDocumentId}
+                      label="PRD 文档"
+                    />
+                    <RequirementMarkdown
+                      className="split-prd-pane"
+                      source={selectedPrdSource}
+                      demoEntryUrl={selectedDemoUrl}
+                      assetBaseUrl={selectedPrdAssetBaseUrl}
+                    />
+                  </div>
+                ) : (
+                  <RequirementMarkdown
+                    className="split-prd-pane"
+                    source={selectedPrdSource}
+                    demoEntryUrl={selectedDemoUrl}
+                    assetBaseUrl={selectedPrdAssetBaseUrl}
+                  />
+                )}
               </section>
             ) : (
               <section
                 className={`content-surface ${tab === "demo" ? "is-demo" : ""}`}
               >
                 {tab === "demo" ? (
-                  <DemoFrame
-                    viewport="desktop"
-                    src={selectedVersion!.demoEntryUrl}
-                  />
+                  demoDocuments.length > 1 ? (
+                    <div className="document-browser is-demo">
+                      <VersionDocumentDirectory
+                        documents={demoDocuments}
+                        selectedId={selectedDemoDocument?.id ?? ""}
+                        onSelect={setSelectedDemoDocumentId}
+                        label="Demo 文件"
+                      />
+                      <div className="document-browser-content">
+                        <DemoFrame viewport="desktop" src={selectedDemoUrl} />
+                      </div>
+                    </div>
+                  ) : (
+                    <DemoFrame viewport="desktop" src={selectedDemoUrl} />
+                  )
                 ) : (
-                  <RequirementMarkdown
-                    source={selectedVersion!.prd}
-                    demoEntryUrl={selectedVersion!.demoEntryUrl}
-                  />
+                  prdDocuments.length > 1 ? (
+                    <div className="document-browser is-prd">
+                      <VersionDocumentDirectory
+                        documents={prdDocuments}
+                        selectedId={selectedPrdDocument?.id ?? ""}
+                        onSelect={setSelectedPrdDocumentId}
+                        label="PRD 文档"
+                      />
+                      <RequirementMarkdown
+                        source={selectedPrdSource}
+                        demoEntryUrl={selectedDemoUrl}
+                        assetBaseUrl={selectedPrdAssetBaseUrl}
+                      />
+                    </div>
+                  ) : (
+                    <RequirementMarkdown
+                      source={selectedPrdSource}
+                      demoEntryUrl={selectedDemoUrl}
+                      assetBaseUrl={selectedPrdAssetBaseUrl}
+                    />
+                  )
                 )}
               </section>
             )}
@@ -1468,24 +1832,35 @@ export function RequirementWorkspace({
             ) : null}
           </>
         )}
-        {view !== "detail" ? (
-          <RequirementAssistant
-            key={`assistant-${view}-${activeProject?.id ?? "library"}`}
-            context={
-              view === "requirements" && activeProject
-                ? {
-                    kind: "project",
-                    projectId: activeProject.id,
-                    projectName: activeProject.name,
-                  }
-                : { kind: "library" }
-            }
-            onOpenRequirement={(requirementCode, versionNo) =>
-              void loadRequirement(requirementCode, versionNo)
-            }
-          />
-        ) : null}
       </main>
+      <RequirementAssistant
+        key={
+          view === "detail" && detail && selectedVersion
+            ? `assistant-requirement-${detail.requirement.code}-${selectedVersion.number}`
+            : `assistant-${view}-${activeProject?.id ?? "library"}`
+        }
+        context={
+          view === "detail" && detail && selectedVersion
+            ? {
+                kind: "requirement",
+                projectId: detail.project.id,
+                projectName: detail.project.name,
+                requirementCode: detail.requirement.code,
+                requirementTitle: detail.requirement.title,
+                versionNo: selectedVersion.number,
+              }
+            : view === "requirements" && activeProject
+              ? {
+                  kind: "project",
+                  projectId: activeProject.id,
+                  projectName: activeProject.name,
+                }
+              : { kind: "library" }
+        }
+        onOpenRequirement={(requirementCode, versionNo) =>
+          void loadRequirement(requirementCode, versionNo)
+        }
+      />
       <PublishPanel
         key={`${detail?.requirement.code ?? "new"}-${publishOpen ? "open" : "closed"}`}
         projects={projects}
