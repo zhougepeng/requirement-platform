@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DemoFrame } from "@/components/demo-frame";
 import { ModelManager } from "@/components/model-manager";
 import { DifyKnowledgeSettings } from "@/components/dify-knowledge-settings";
+import { MaterialLibrary } from "@/components/material-library";
 import { EmployeeManager } from "@/components/employee-manager";
 import { GithubUpdateManager } from "@/components/github-update-manager";
 import { RequirementAssistant } from "@/components/requirement-assistant";
@@ -31,7 +32,7 @@ import type {
 } from "@/lib/types";
 
 type Tab = "demo" | "prd" | "split" | "test-cases" | "versions";
-type View = "board" | "detail" | "projects" | "requirements";
+type View = "board" | "detail" | "projects" | "requirements" | "materials";
 type ApiResponse<T> =
   { data: T; error?: never } | { data?: never; error: string };
 type CurrentUser = {
@@ -1293,6 +1294,13 @@ export function RequirementWorkspace({
               <Icon name="book" />
               <span>需求看板</span>
             </button>
+            <button
+              className={`nav-item ${view === "materials" ? "is-selected" : ""}`}
+              onClick={() => setView("materials")}
+            >
+              <Icon name="file" />
+              <span>资料库</span>
+            </button>
             <div className="nav-caption nav-caption-with-action">
               <span>我的项目</span>
             </div>
@@ -1494,7 +1502,7 @@ export function RequirementWorkspace({
         </aside>
       ) : null}
       <main
-        className={`main-panel ${view === "detail" && tab === "demo" ? "is-demo-view" : ""}`}
+        className={`main-panel ${view === "detail" && tab === "demo" ? "is-demo-view" : ""} ${view === "materials" ? "is-materials-view" : ""}`}
       >
         {view === "board" ? (
           <RequirementBoard
@@ -1504,6 +1512,8 @@ export function RequirementWorkspace({
               setView("requirements");
             }}
           />
+        ) : view === "materials" ? (
+          <MaterialLibrary projects={projects} canEdit={currentUser.canPublish} />
         ) : view === "projects" || (view === "requirements" && !activeProject) ? (
           <ProjectDirectory
             projects={projects}

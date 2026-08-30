@@ -61,7 +61,7 @@ function compact(text: string, detailed: boolean, maximum = 260) {
 }
 
 function sourceFromKnowledge(source: RetrievedKnowledgeSource, chunks: RetrievedKnowledgeChunk[]): RequirementAnswerSource {
-  const contentType = source.contentType === "requirement_summary" ? "需求摘要" : source.contentType === "test_case" ? "测试用例" : "PRD";
+  const contentType = source.contentType === "material" ? "资料" : source.contentType === "requirement_summary" ? "需求摘要" : source.contentType === "test_case" ? "测试用例" : "PRD";
   const excerpt = chunks.find((chunk) => chunk.sourceId === source.id)?.content ?? "";
   return {
     id: source.id,
@@ -72,7 +72,7 @@ function sourceFromKnowledge(source: RetrievedKnowledgeSource, chunks: Retrieved
     prdVersion: source.versionNo,
     section: contentType,
     excerpt: compact(excerpt, false, 360),
-    historical: false,
+    historical: source.sourceKind === "material",
     releaseStatus: source.status,
     scheduleVersion: source.scheduleVersion,
     scheduledGrayDate: source.scheduledGrayDate,
@@ -97,7 +97,7 @@ function cleanJson(raw: string): ModelAnswer | undefined {
 
 function systemPrompt(detailed: boolean, mode: "current" | "future", usedOfflineFallback: boolean) {
   return `你是需求管理平台中的产品知识助手。仅依据提供的 Dify 知识库片段回答，不得自行编造。
-最高规则：已上线需求是当前产品事实；已排期和未上线需求都是规划，不能说成当前已经支持。${mode === "future" ? "用户询问未来规划，只能依据已排期或未上线资料回答，并明确说明是已排期还是尚未上线。" : usedOfflineFallback ? "已上线资料没有命中；当前资料仅提供了已排期或未上线规划。必须明确回答当前暂不支持，再说明已有规划。" : "用户询问当前能力或一般产品问题；资料均来自已上线需求，可作为当前事实。"}
+最高规则：已上线需求是当前产品事实；已排期和未上线需求都是规划，不能说成当前已经支持。${mode === "future" ? "用户询问未来规划，只能依据已排期或未上线资料回答，并明确说明是已排期还是尚未上线。" : usedOfflineFallback ? "当前检索只命中已排期或未上线资料。先说明当前尚不能确认已支持，再简要说明已有规划及其状态。" : "普通查询的资料可能同时包含已上线、已排期和未上线需求。可以回答相关规划，但每条规划必须写明“已排期”或“未上线”；只有已上线来源才能说明当前已支持。"}
 回答先给结论，再给要点。不要复述问题、不要使用无意义开场、不要大段复制原文。来源只引用提供的来源 ID。${detailed ? "用户要求详细说明，可适度展开，但仍不要粘贴原文。" : "默认总长度控制在约 300 个汉字内，keyPoints 最多 3 条。"}
 只输出 JSON：{"status":"defined|partial|undefined|conflict","answer":"直接结论","keyPoints":["要点"],"sourceIds":["来源 ID"],"undefinedPoints":["缺失信息"]}`;
 }
@@ -138,7 +138,7 @@ function metaAnswer(detailed: boolean): RequirementAnswer {
 }
 
 function noEvidenceAnswer(question: string, detailed: boolean, mode: "current" | "future"): RequirementAnswer {
-  const statement = mode === "future" ? "当前范围内没有找到未上线规划资料。" : "当前已上线需求中没有找到可确认的产品事实。";
+  const statement = mode === "future" ? "当前范围内没有找到已排期或未上线的规划资料。" : "当前范围内没有找到与问题相关的需求资料。";
   return { status: "undefined", answer: `🟡 ${statement}`, keyPoints: [], flow: [], sources: [], undefinedPoints: [compact(question, detailed, 140)], relatedRequirements: [], testCases: [], detailed };
 }
 

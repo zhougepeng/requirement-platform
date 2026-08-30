@@ -2,6 +2,7 @@ import { apiError, apiJson } from "@/lib/api-response";
 import { publisherFromRequest } from "@/services/auth/request-actor";
 import { updateRequirementReleaseStatus } from "@/services/requirement/repository";
 import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
+import { scheduleRequirementKnowledgeExtraction } from "@/services/materials/requirement-knowledge-extraction-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ re
       releaseDate: typeof body.releaseDate === "string" ? body.releaseDate : undefined,
     });
     scheduleRequirementKnowledgeSync(requirementCode);
+    if (updated.status === "online") scheduleRequirementKnowledgeExtraction(requirementCode);
     return apiJson(updated);
   } catch (error) {
     return apiError(error);

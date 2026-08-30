@@ -12,7 +12,11 @@ EnvironmentFile=__PLATFORM_ROOT__/.env.local
 ExecStart=/usr/bin/env node __PLATFORM_ROOT__/current/.next/standalone/server.js
 Restart=always
 RestartSec=3
-NoNewPrivileges=true
+# The web process starts only the root-owned updater through a single, exact
+# sudoers allowlist entry. Keep privilege escalation available for that
+# controlled hand-off; the updater itself performs the privileged work in a
+# separate transient systemd unit.
+NoNewPrivileges=false
 PrivateTmp=true
 
 [Install]

@@ -575,6 +575,7 @@ export type CurrentRequirementKnowledgeSource = {
   sourceUpdatedAt: string;
   changeSummary: string;
   prdDocuments: Array<{ name: string; path: string; content: string }>;
+  demoEntryUrl?: string;
   testCases: RequirementTestCase[];
 };
 
@@ -599,6 +600,7 @@ export async function listCurrentRequirementKnowledgeSources() {
       sourceUpdatedAt: requirement.updatedAt || version.publishedAt,
       changeSummary: version.changeSummary,
       prdDocuments: prdDocumentsForVersion(version).map((document) => ({ name: document.name, path: document.path, content: document.content ?? "" })),
+      demoEntryUrl: version.demoEntryUrl,
       testCases: (store.testCases ?? []).filter((item) => item.requirementCode === requirement.code && item.versionNo === version.number),
     } satisfies CurrentRequirementKnowledgeSource];
   });

@@ -4,6 +4,7 @@ import { apiError, apiJson } from "@/lib/api-response";
 import { getDifyKnowledgeSettings, saveDifyKnowledgeConfiguration } from "@/services/assistant/dify-config";
 import { DifyKnowledgeClient } from "@/services/assistant/dify-knowledge-client";
 import { listKnowledgeSyncEntries, syncExistingKnowledge } from "@/services/assistant/knowledge-sync-service";
+import { listMaterialKnowledgeSyncEntries, syncAllMaterialKnowledge } from "@/services/materials/material-knowledge-sync-service";
 import { adminFromRequest } from "@/services/auth/request-actor";
 
 export const runtime = "nodejs";
@@ -17,11 +18,11 @@ const configurationSchema = z.object({
 const actionSchema = z.object({ action: z.enum(["verify", "sync"]) });
 
 async function settingsPayload() {
-  const entries = await listKnowledgeSyncEntries();
-  const failed = entries.filter((entry) => entry.lastError);
+  const [entries, materialEntries] = await Promise.all([listKnowledgeSyncEntries(), listMaterialKnowledgeSyncEntries()]);
+  const failed = [...entries, ...materialEntries].filter((entry) => entry.lastError);
   return {
     ...getDifyKnowledgeSettings(),
-    sync: { totalDocuments: entries.length, failedDocuments: failed.length, lastError: failed[0]?.lastError },
+    sync: { totalDocuments: entries.length + materialEntries.length, failedDocuments: failed.length, lastError: failed[0]?.lastError },
   };
 }
 
@@ -52,8 +53,8 @@ export async function POST(request: Request) {
       const result = await new DifyKnowledgeClient().verifyConnection();
       return apiJson({ ...(await settingsPayload()), verification: result });
     }
-    const result = await syncExistingKnowledge();
-    return apiJson({ ...(await settingsPayload()), syncResult: result });
+    const [requirements, materials] = await Promise.all([syncExistingKnowledge(), syncAllMaterialKnowledge()]);
+    return apiJson({ ...(await settingsPayload()), syncResult: { requirements, materials } });
   } catch (error) {
     return apiError(error);
   }

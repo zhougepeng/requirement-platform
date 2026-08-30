@@ -58,7 +58,7 @@ function scopeForQuestion(question: string, context: AssistantContext) {
 function quickQuestions(context: AssistantContext) {
   if (context.kind === "requirement") return ["总结这个需求", "核心业务流程", "有哪些异常场景", "有哪些未明确规则", "最近版本修改了什么"];
   if (context.kind === "project") return ["这个项目的核心流程是什么？", "有哪些异常场景？", "最近有哪些需求发生变化？", "哪些规则 PRD 还没有定义？"];
-  return ["有哪些项目和核心流程？", "某个字段在哪里定义？", "最近有哪些需求发生变化？", "哪些规则 PRD 还没有定义？"];
+  return ["有哪些项目和核心流程？", "哪些需求已排期或未上线？", "最近有哪些需求发生变化？", "哪些规则 PRD 还没有定义？"];
 }
 
 export function RequirementAssistant({ context, onOpenRequirement, onOpenTestCases }: { context: AssistantContext; onOpenRequirement?: (requirementCode: string, versionNo?: number) => void; onOpenTestCases?: () => void }) {
@@ -194,7 +194,7 @@ export function RequirementAssistant({ context, onOpenRequirement, onOpenTestCas
 
   const contextDetail = context.kind === "requirement"
     ? `${context.projectName ?? "当前项目"} ＞ ${context.requirementTitle ?? context.requirementCode} ＞ V${context.versionNo ?? "当前"}`
-    : context.kind === "project" ? `${context.projectName ?? "当前项目"} ＞ 全部需求` : "所有已发布需求";
+    : context.kind === "project" ? `${context.projectName ?? "当前项目"} ＞ 全部需求` : "全部需求";
 
   return <>
     <button ref={triggerRef} type="button" className="assistant-trigger" onClick={() => { if (ignoreTriggerClickRef.current) { ignoreTriggerClickRef.current = false; return; } setOpen(true); }} onPointerDown={beginTriggerDrag} onPointerMove={moveTrigger} onPointerUp={endTriggerDrag} onPointerCancel={endTriggerDrag} title="打开需求智能体；可拖拽调整位置" aria-label="打开需求智能体，可拖拽调整位置"><Icon name="message" /><span className="sr-only">需求智能体</span></button>
@@ -219,7 +219,7 @@ function AnswerContent({ result, onOpenRequirement, onOpenTestCases, onOpenDemo,
     {result.flow.length ? <p className="assistant-flow">{result.flow.join(" → ")}</p> : null}
     {result.comparison ? <div className="assistant-comparison"><table><thead><tr>{result.comparison.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{result.comparison.rows.map((row, index) => <tr key={`${index}-${row.join("-")}`}>{row.map((cell, cellIndex) => <td key={`${cellIndex}-${cell}`}>{cell}</td>)}</tr>)}</tbody></table></div> : null}
     {result.undefinedPoints.length ? <p className="assistant-undefined-points">未定义：{result.undefinedPoints.join("；")}</p> : null}
-    {result.sources.length ? <details className="assistant-sources"><summary>查看来源（{result.sources.length}）</summary>{result.sources.map((source) => <button key={source.id} onClick={() => onOpenRequirement?.(source.requirementCode, source.prdVersion)}><small>{source.requirementName} · {source.releaseStatus === "online" ? `已上线${source.releaseVersion ? ` · ${source.releaseVersion}` : ""}${source.releaseDate ? ` · ${source.releaseDate}` : ""}` : source.releaseStatus === "scheduled" ? `已排期${source.scheduleVersion ? ` · ${source.scheduleVersion}` : ""}${source.scheduledFullDate ? ` · 预计全量 ${source.scheduledFullDate}` : ""}` : "未上线 · 规划中"} · PRD · {source.section}</small><span>{source.excerpt}</span></button>)}</details> : null}
+    {result.sources.length ? <details className="assistant-sources"><summary>查看来源（{result.sources.length}）</summary>{result.sources.map((source) => <button key={source.id} onClick={() => { if (!source.historical) onOpenRequirement?.(source.requirementCode, source.prdVersion); }}><small>{source.historical ? "资料库" : source.releaseStatus === "online" ? `已上线${source.releaseVersion ? ` · ${source.releaseVersion}` : ""}${source.releaseDate ? ` · ${source.releaseDate}` : ""}` : source.releaseStatus === "scheduled" ? `已排期${source.scheduleVersion ? ` · ${source.scheduleVersion}` : ""}${source.scheduledFullDate ? ` · 预计全量 ${source.scheduledFullDate}` : ""}` : "未上线 · 规划中"} · {source.requirementName} · {source.section}</small><span>{source.excerpt}</span></button>)}</details> : null}
     {result.relatedRequirements.length ? <p className="assistant-related">关联需求：{result.relatedRequirements.map((item) => <button key={item.code} onClick={() => onOpenRequirement?.(item.code)}>{item.title}</button>)}</p> : null}
     {result.testCases.length ? <div className="assistant-test-cases"><small>相关测试用例</small>{result.testCases.map((testCase) => <button key={testCase.id} onClick={() => { onOpenTestCases?.(); window.dispatchEvent(new CustomEvent("requirement-open-test-cases")); }}><b>{testCase.id}</b><span>{testCase.title}</span><em>{[testCase.priority, testCase.status, testCase.module].filter(Boolean).join(" · ")}</em></button>)}</div> : null}
     {result.demo?.available ? <button className="assistant-inline-action" onClick={onOpenDemo}>演示这个流程</button> : null}

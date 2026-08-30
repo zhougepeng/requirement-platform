@@ -1,7 +1,7 @@
 import "server-only";
 
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -72,7 +72,13 @@ async function latestRelease() {
 }
 
 function updaterAvailable() {
-  return process.platform === "linux" && existsSync(UPDATER_PATH);
+  if (process.platform !== "linux") return false;
+  try {
+    const stats = statSync(UPDATER_PATH);
+    return stats.isFile() && (stats.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 export async function checkInstallerUpdate(): Promise<InstallerUpdateStatus> {
@@ -99,8 +105,17 @@ export async function startInstallerUpdate() {
   if (!status.canInstall) throw new Error(status.blockedReason || "当前无法自动安装更新。");
   try {
     await execFileAsync("sudo", ["-n", UPDATER_PATH, "--start"], { timeout: 15_000, maxBuffer: 64 * 1024 });
-  } catch {
-    throw new Error("无法启动更新助手。请确认安装包已完成自动更新助手配置，且服务账号具备受控更新权限。");
+  } catch (error) {
+    const details = error && typeof error === "object" && "stderr" in error && typeof error.stderr === "string"
+      ? error.stderr.trim().replace(/\s+/g, " ").slice(0, 240)
+      : "";
+    if (/no new privileges|effective uid|setuid|not permitted/i.test(details)) {
+      throw new Error("更新助手已安装，但当前 systemd 服务禁止提权。请重新安装最新安装包以更新服务配置，然后再从页面重试。");
+    }
+    if (/a password is required|not allowed|permission denied/i.test(details)) {
+      throw new Error("更新助手已安装，但服务账号没有免密执行权限。请检查 /etc/sudoers.d/requirement-platform-updater 后再重试。");
+    }
+    throw new Error(details ? `无法启动更新助手：${details}` : "无法启动更新助手。请确认服务账号具备受控更新权限。");
   }
   return { ...status, started: true };
 }

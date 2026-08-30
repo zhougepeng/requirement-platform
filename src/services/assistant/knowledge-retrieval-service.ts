@@ -1,9 +1,12 @@
 import "server-only";
 
 import type { RequirementActor } from "@/services/auth/request-actor";
-import { listCurrentRequirementKnowledgeSources, type CurrentRequirementKnowledgeSource } from "@/services/requirement/repository";
+import { listCurrentRequirementKnowledgeSources, listProjects, type CurrentRequirementKnowledgeSource } from "@/services/requirement/repository";
 import { DifyKnowledgeClient, type DifyRetrievedChunk } from "@/services/assistant/dify-knowledge-client";
 import { listKnowledgeSyncEntries, schedulePendingKnowledgeRetry, type KnowledgeContentType } from "@/services/assistant/knowledge-sync-service";
+import { listAllMaterials, type Material } from "@/services/materials/material-service";
+import { listMaterialKnowledgeSyncEntries, schedulePendingMaterialKnowledgeRetry } from "@/services/materials/material-knowledge-sync-service";
+import { schedulePendingRequirementKnowledgeExtractionRetry } from "@/services/materials/requirement-knowledge-extraction-service";
 
 export type KnowledgeScope = "current-requirement" | "current-project" | "all-published";
 export type KnowledgeQuestionMode = "current" | "future";
@@ -20,7 +23,8 @@ export type RetrievedKnowledgeSource = {
   scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
-  contentType: KnowledgeContentType;
+  contentType: KnowledgeContentType | "material";
+  sourceKind?: "material";
   sourceUpdatedAt: string;
 };
 export type RetrievedKnowledgeChunk = { sourceId: string; content: string; score?: number };
@@ -30,6 +34,18 @@ type Input = { question: string; scope: KnowledgeScope; requirementCode?: string
 
 function isFutureQuestion(question: string) {
   return /后面|未来|规划|下一版|下个版本|准备做|待做|尚未上线|未上线(?:的)?(?:需求|功能)?|还没有上线|排期|预计上线/.test(question);
+}
+
+function mergeHits(...groups: DifyRetrievedChunk[][]) {
+  const seen = new Set<string>();
+  const merged: DifyRetrievedChunk[] = [];
+  for (const hit of groups.flat()) {
+    const key = `${hit.documentId}\n${hit.content}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(hit);
+  }
+  return merged;
 }
 
 function toSource(source: CurrentRequirementKnowledgeSource, contentType: KnowledgeContentType, id: string): RetrievedKnowledgeSource {
@@ -73,6 +89,40 @@ function filterHits(hits: DifyRetrievedChunk[], sources: CurrentRequirementKnowl
   return { chunks: limitChunks(chunks), sources: [...visible.values()] };
 }
 
+function materialSource(material: Material, documentId: string, projectNames: Map<string, string>): RetrievedKnowledgeSource {
+  return {
+    id: documentId,
+    projectId: material.projectId ?? "public",
+    projectName: material.projectId ? projectNames.get(material.projectId) ?? "已删除项目" : "公共资料",
+    requirementCode: material.id,
+    requirementName: material.title,
+    versionNo: 0,
+    status: "online",
+    contentType: "material",
+    sourceKind: "material",
+    sourceUpdatedAt: material.updatedAt,
+  };
+}
+
+function filterMaterialHits(hits: DifyRetrievedChunk[], materials: Material[], entries: Awaited<ReturnType<typeof listMaterialKnowledgeSyncEntries>>, input: Input, projectNames: Map<string, string>) {
+  const documentIds = new Map(entries.flatMap((entry) => entry.documentId ? [[entry.documentId, entry.materialId] as const] : []));
+  const materialById = new Map(materials.map((item) => [item.id, item]));
+  const visible = new Map<string, RetrievedKnowledgeSource>();
+  const chunks: RetrievedKnowledgeChunk[] = [];
+  for (const hit of hits) {
+    const material = materialById.get(documentIds.get(hit.documentId) ?? "");
+    if (!material) continue;
+    const visibleInScope = material.scope === "public"
+      || input.scope === "all-published"
+      || (input.scope === "current-project" && material.projectId === input.projectId)
+      || (input.scope === "current-requirement" && material.projectId === input.projectId);
+    if (!visibleInScope) continue;
+    visible.set(hit.documentId, materialSource(material, hit.documentId, projectNames));
+    chunks.push({ sourceId: hit.documentId, content: hit.content, score: hit.score });
+  }
+  return { chunks, sources: [...visible.values()] };
+}
+
 /**
  * Dify's public dataset retrieval API currently has no reliable document
  * metadata-filter request parameter. The platform therefore treats the Dify
@@ -81,12 +131,32 @@ function filterHits(hits: DifyRetrievedChunk[], sources: CurrentRequirementKnowl
  */
 export async function retrieveProductKnowledge(input: Input): Promise<KnowledgeRetrievalResult> {
   schedulePendingKnowledgeRetry();
-  const scopedSources = resolveScope(input, await listCurrentRequirementKnowledgeSources());
-  const [entries, hits] = await Promise.all([listKnowledgeSyncEntries(), new DifyKnowledgeClient().retrieve(input.question)]);
+  schedulePendingMaterialKnowledgeRetry();
+  schedulePendingRequirementKnowledgeExtractionRetry();
+  const [allRequirementSources, projects, materials, materialEntries] = await Promise.all([
+    listCurrentRequirementKnowledgeSources(),
+    listProjects(),
+    listAllMaterials(),
+    listMaterialKnowledgeSyncEntries(),
+  ]);
+  const scopedSources = resolveScope(input, allRequirementSources);
   const mode: KnowledgeQuestionMode = isFutureQuestion(input.question) ? "future" : "current";
+  const client = new DifyKnowledgeClient();
+  const [entries, primaryHits, planningHits] = await Promise.all([
+    listKnowledgeSyncEntries(),
+    client.retrieve(input.question),
+    mode === "future" ? Promise.resolve([]) : client.retrieve(`${input.question}\n\n同时检索相关的已排期、未上线和规划需求。`),
+  ]);
+  const hits = mergeHits(primaryHits, planningHits);
   if (mode === "future") return { mode, usedOfflineFallback: false, ...filterHits(hits, scopedSources, entries, new Set(["scheduled", "offline"])) };
-  const online = filterHits(hits, scopedSources, entries, new Set(["online"]));
-  if (online.chunks.length) return { mode, usedOfflineFallback: false, ...online };
-  const offline = filterHits(hits, scopedSources, entries, new Set(["scheduled", "offline"]));
-  return { mode, usedOfflineFallback: offline.chunks.length > 0, ...offline };
+
+  // 普通查询也要能提示相关规划，但“当前已支持”的判断只由回答层依据已上线来源给出。
+  const requirementMatched = filterHits(hits, scopedSources, entries, new Set(["online", "scheduled", "offline"]));
+  const materialMatched = filterMaterialHits(hits, materials, materialEntries, input, new Map(projects.map((project) => [project.id, project.name])));
+  const matched = {
+    chunks: limitChunks([...requirementMatched.chunks, ...materialMatched.chunks]),
+    sources: [...requirementMatched.sources, ...materialMatched.sources],
+  };
+  const usedOfflineFallback = matched.chunks.length > 0 && !matched.sources.some((source) => source.status === "online");
+  return { mode, usedOfflineFallback, ...matched };
 }
