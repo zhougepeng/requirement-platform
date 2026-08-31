@@ -7,6 +7,7 @@ import { DifyKnowledgeSettings } from "@/components/dify-knowledge-settings";
 import { MaterialLibrary } from "@/components/material-library";
 import { EmployeeManager } from "@/components/employee-manager";
 import { GithubUpdateManager } from "@/components/github-update-manager";
+import { PersonalAccessTokenManager } from "@/components/personal-access-token-manager";
 import { RequirementAssistant } from "@/components/requirement-assistant";
 import { PublishPanel } from "@/components/publish-panel";
 import { ProjectDialog } from "@/components/project-dialog";
@@ -777,6 +778,7 @@ export function RequirementWorkspace({
   const [modelManagerRequest, setModelManagerRequest] = useState(0);
   const [difySettingsRequest, setDifySettingsRequest] = useState(0);
   const [githubUpdateRequest, setGithubUpdateRequest] = useState(0);
+  const [personalAccessTokenRequest, setPersonalAccessTokenRequest] = useState(0);
   const [publishOpen, setPublishOpen] = useState(false);
   const [snapshotPublishOpen, setSnapshotPublishOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
@@ -1384,6 +1386,13 @@ export function RequirementWorkspace({
                 onClose={() => setGithubUpdateRequest(0)}
               />
             ) : null}
+            {currentUser.canPublish ? (
+              <PersonalAccessTokenManager
+                key={`personal-access-token-${personalAccessTokenRequest}`}
+                initialOpen={personalAccessTokenRequest > 0}
+                onClose={() => setPersonalAccessTokenRequest(0)}
+              />
+            ) : null}
             <div className="profile-menu">
               <button
                 className="profile"
@@ -1431,6 +1440,15 @@ export function RequirementWorkspace({
                           }}
                         >
                           新建项目
+                        </button>
+                        <button
+                          role="menuitem"
+                          onClick={() => {
+                            setProfileMenuOpen(false);
+                            setPersonalAccessTokenRequest((current) => current + 1);
+                          }}
+                        >
+                          个人访问令牌
                         </button>
                       </>
                     ) : null}

@@ -26,22 +26,18 @@ async function hasValidSession(value: string | undefined) {
 }
 
 /**
- * 服务间调用（例如工作搭子）使用独立的 Bearer 令牌，不携带浏览器会话。
- * 中间件必须在进入 API Route 前放行该令牌，否则请求会在这里先返回 401。
- * 令牌只对 API 请求生效，页面和静态资源仍然必须通过飞书登录。
+ * 个人访问令牌存于服务端数据目录，Edge 中间件无法安全读取该文件。
+ * Bearer 请求仅在此处放行，真正的令牌、在职状态和角色校验统一由 API Route 完成。
  */
-function hasValidIntegrationToken(request: NextRequest) {
-  if (!request.nextUrl.pathname.startsWith("/api/")) return false;
-  const configured = process.env.WORKBENCH_INTEGRATION_TOKEN?.trim();
-  const supplied = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  return Boolean(configured && supplied && configured === supplied);
+function hasBearerAccessToken(request: NextRequest) {
+  return request.nextUrl.pathname.startsWith("/api/") && /^Bearer\s+\S+$/i.test(request.headers.get("authorization") ?? "");
 }
 
 export async function middleware(request: NextRequest) {
   if (process.env.AUTH_MODE !== "feishu") return NextResponse.next();
   const path = request.nextUrl.pathname;
   if (path === "/login" || path.startsWith("/auth/") || path.startsWith("/api/auth/") || path === "/api/health" || path === "/mcp") return NextResponse.next();
-  if (hasValidIntegrationToken(request)) return NextResponse.next();
+  if (hasBearerAccessToken(request)) return NextResponse.next();
   if (await hasValidSession(request.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();
   if (path.startsWith("/api/")) return NextResponse.json({ error: "请先使用飞书登录。" }, { status: 401 });
   const loginUrl = publicAppUrl("/login", request.url);

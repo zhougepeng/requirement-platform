@@ -30,7 +30,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ ma
     await publisherFromRequest(request);
     const input = updateSchema.parse(await request.json());
     if (input.scope === "project" && input.projectId) await getProject(input.projectId);
-    const material = await updateMaterial((await params).materialId, { ...input, directoryId: input.directoryId ?? undefined });
+    const material = await updateMaterial((await params).materialId, input);
     scheduleMaterialKnowledgeSync(material.id);
     return apiJson(material);
   } catch (error) {

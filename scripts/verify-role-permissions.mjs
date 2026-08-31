@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -11,7 +11,6 @@ const port = 3313;
 const baseUrl = `http://127.0.0.1:${port}`;
 const sessionSecret = randomBytes(32).toString("base64url");
 const dataDir = await mkdtemp(path.join(tmpdir(), "requirement-platform-permissions-"));
-const integrationToken = randomBytes(32).toString("base64url");
 
 function expect(condition, message) {
   if (!condition) throw new Error(message);
@@ -76,7 +75,6 @@ const server = spawn(process.execPath, ["server.js"], {
     AUTH_COOKIE_SECURE: "false",
     APP_BASE_URL: baseUrl,
     AUTH_SESSION_SECRET: sessionSecret,
-    WORKBENCH_INTEGRATION_TOKEN: integrationToken,
     REQUIREMENT_PLATFORM_DATA_DIR: dataDir,
     REQUIREMENT_PLATFORM_PUBLISHED_DEMO_DIR: path.join(dataDir, "published-demos"),
   },
@@ -104,16 +102,22 @@ try {
   expect((await request("/api/v1/admin/employees", "admin")).status === 200, "管理角色无法读取员工权限。");
   expect((await request("/api/v1/models", "admin")).status === 200, "管理角色无法读取模型管理。");
 
-  const tokenHeaders = { Authorization: `Bearer ${integrationToken}` };
+  expect((await request("/api/v1/auth/access-tokens", "viewer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label: "viewer-token" }) })).status === 403, "查看角色错误生成个人访问令牌。");
+  const issuedToken = await request("/api/v1/auth/access-tokens", "publisher", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label: "权限回归测试" }) });
+  expect(issuedToken.status === 201, `发布角色无法生成个人访问令牌（HTTP ${issuedToken.status}）。`);
+  const issuedPayload = await issuedToken.json();
+  const accessToken = issuedPayload.data?.token;
+  expect(typeof accessToken === "string" && accessToken.startsWith("rpt_"), "个人访问令牌响应缺少有效令牌。");
+  const tokenHeaders = { Authorization: `Bearer ${accessToken}` };
   const tokenProjects = await request("/api/v1/projects", undefined, { headers: tokenHeaders });
-  expect(tokenProjects.status === 200, `工作搭子令牌无法读取项目列表（HTTP ${tokenProjects.status}）。`);
+  expect(tokenProjects.status === 200, `个人访问令牌无法读取项目列表（HTTP ${tokenProjects.status}）。`);
 
   const createdProject = await request("/api/v1/projects", undefined, {
     method: "POST",
     headers: { ...tokenHeaders, "content-type": "application/json" },
     body: JSON.stringify({ code: "WBK", name: "工作搭子联调项目", description: "服务间令牌回归测试" }),
   });
-  expect(createdProject.status === 201, `工作搭子令牌无法创建项目（HTTP ${createdProject.status}）。`);
+  expect(createdProject.status === 201, `个人访问令牌无法创建项目（HTTP ${createdProject.status}）。`);
 
   const archive = new AdmZip();
   archive.addFile("index.html", Buffer.from("<!doctype html><title>workbench integration</title>", "utf8"));
@@ -124,7 +128,7 @@ try {
     headers: tokenHeaders,
     body: form,
   });
-  expect(uploadedArtifact.status === 201, `工作搭子令牌无法上传 Demo 工件（HTTP ${uploadedArtifact.status}）。`);
+  expect(uploadedArtifact.status === 201, `个人访问令牌无法上传 Demo 工件（HTTP ${uploadedArtifact.status}）。`);
   const artifactPayload = await uploadedArtifact.json();
   const artifactId = artifactPayload.data?.id;
   expect(typeof artifactId === "string" && artifactId.length > 0, "Demo 工件响应缺少 id。");
@@ -140,10 +144,11 @@ try {
       change_summary: "服务间令牌回归测试。",
     }),
   });
-  expect(published.status === 201, `工作搭子令牌无法发布需求（HTTP ${published.status}）。`);
+  expect(published.status === 201, `个人访问令牌无法发布需求（HTTP ${published.status}）。`);
   const publishedPayload = await published.json();
   const requirementCode = publishedPayload.data?.requirement?.code;
   expect(typeof requirementCode === "string" && requirementCode.length > 0, "发布需求响应缺少需求编号。");
+  expect(publishedPayload.data?.requirement?.owner === "publisher", "个人访问令牌发布需求未归属到真实发布人。");
 
   const createdGap = await request(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/gaps`, "viewer", {
     method: "POST",
@@ -154,12 +159,21 @@ try {
   const gaps = await request(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/gaps`, "viewer");
   expect(gaps.status === 200 && (await gaps.json()).data?.length === 1, "待补充项未正确保存或读取。" );
 
-  expect((await request("/api/v1/admin/employees", undefined, { headers: tokenHeaders })).status === 403, "工作搭子令牌错误获得员工管理权限。");
-  expect((await request("/api/v1/models", undefined, { headers: tokenHeaders })).status === 403, "工作搭子令牌错误获得模型管理权限。");
+  expect((await request("/api/v1/admin/employees", undefined, { headers: tokenHeaders })).status === 403, "个人访问令牌错误获得员工管理权限。");
+  expect((await request("/api/v1/models", undefined, { headers: tokenHeaders })).status === 403, "个人访问令牌错误获得模型管理权限。");
+  expect((await request("/api/v1/admin/employees", "admin", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ open_id: "publisher", role: "none" }) })).status === 200, "管理员无法取消发布权限。");
+  expect((await request("/api/v1/projects", undefined, { headers: tokenHeaders })).status === 403, "取消发布权限后个人访问令牌仍可使用。");
+  expect((await request("/api/v1/admin/employees", "admin", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ open_id: "publisher", role: "publisher" }) })).status === 200, "管理员无法恢复发布权限。");
+  expect((await request("/api/v1/projects", undefined, { headers: tokenHeaders })).status === 200, "恢复发布权限后个人访问令牌未恢复使用。");
+  const employeeFile = path.join(dataDir, "employees.local.json");
+  const employeeStore = JSON.parse(await readFile(employeeFile, "utf8"));
+  employeeStore.employees.find((item) => item.openId === "publisher").directoryActive = false;
+  await writeFile(employeeFile, JSON.stringify(employeeStore), "utf8");
+  expect((await request("/api/v1/projects", undefined, { headers: tokenHeaders })).status === 403, "员工离职后个人访问令牌仍可使用。");
   const invalidToken = await request("/api/v1/projects", undefined, { headers: { Authorization: "Bearer invalid-workbench-token" } });
-  expect(invalidToken.status === 401 || invalidToken.status === 403, `错误工作搭子令牌未被拒绝（HTTP ${invalidToken.status}）。`);
+  expect(invalidToken.status === 401 || invalidToken.status === 403, `错误个人访问令牌未被拒绝（HTTP ${invalidToken.status}）。`);
 
-  console.log("权限回归测试通过：查看可读和使用 AI 入口并可记录待补充项；发布可创建项目并发布 Demo+PRD、管理可进入管理员接口；服务间令牌越权和错误令牌均被拒绝。");
+  console.log("权限回归测试通过：查看、发布和管理权限均按角色生效；个人访问令牌仅代表真实发布人创建需求，不能访问管理接口，撤销发布权限后立即失效。");
 } finally {
   await stopServer();
   await rm(dataDir, { recursive: true, force: true });

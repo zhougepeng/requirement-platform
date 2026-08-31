@@ -20,7 +20,7 @@ export type Material = {
   updatedAt: string;
 };
 
-export type MaterialDirectory = { id: string; name: string; createdAt: string; updatedAt: string };
+export type MaterialDirectory = { id: string; name: string; scope: MaterialScope; projectId?: string; parentId?: string; createdAt: string; updatedAt: string };
 type MaterialStore = { schemaVersion: 1; materials: Material[]; directories: MaterialDirectory[] };
 
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -56,7 +56,18 @@ async function readStore(): Promise<MaterialStore> {
     return {
       schemaVersion: 1,
       materials: Array.isArray(parsed.materials) ? parsed.materials.filter((item): item is Material => Boolean(item?.id && item.title && item.content && (item.scope === "project" || item.scope === "public"))) : [],
-      directories: Array.isArray(parsed.directories) ? parsed.directories.filter((item): item is MaterialDirectory => Boolean(item?.id && item.name)) : [],
+      directories: Array.isArray(parsed.directories) ? parsed.directories.flatMap((item) => {
+        if (!item?.id || !item.name) return [];
+        return [{
+          id: item.id,
+          name: item.name,
+          scope: item.scope === "project" ? "project" : "public",
+          projectId: item.scope === "project" && typeof item.projectId === "string" ? item.projectId : undefined,
+          parentId: typeof item.parentId === "string" ? item.parentId : undefined,
+          createdAt: typeof item.createdAt === "string" ? item.createdAt : "",
+          updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : "",
+        } satisfies MaterialDirectory];
+      }) : [],
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { schemaVersion: 1, materials: [], directories: [] };
@@ -88,7 +99,7 @@ async function mutate<T>(operation: (store: MaterialStore) => T | Promise<T>) {
 
 function inScope(item: Material, scope: MaterialScope, projectId?: string, directoryId?: string) {
   if (item.scope !== scope) return false;
-  if (scope === "project") return item.projectId === projectId;
+  if (scope === "project") return item.projectId === projectId && (directoryId ? item.directoryId === directoryId : !item.directoryId);
   return directoryId ? item.directoryId === directoryId : true;
 }
 
@@ -112,12 +123,16 @@ export async function listMaterialDirectories() {
   return clone((await readStore()).directories.toSorted((left, right) => left.name.localeCompare(right.name, "zh-CN")));
 }
 
-export async function createMaterialDirectory(name: string) {
-  const directoryName = normalizeTitle(name);
+export async function createMaterialDirectory(input: { name: string; scope: MaterialScope; projectId?: string; parentId?: string }) {
+  const directoryName = normalizeTitle(input.name);
+  if (input.scope === "project" && !input.projectId) throw new Error("项目子目录必须指定项目。");
   return mutate((store) => {
-    if (store.directories.some((item) => item.name === directoryName)) throw new Error("已存在同名公共资料目录。");
+    const parent = input.parentId ? store.directories.find((item) => item.id === input.parentId) : undefined;
+    if (input.parentId && !parent) throw new Error("父目录不存在。");
+    if (parent && (parent.scope !== input.scope || parent.projectId !== input.projectId)) throw new Error("父目录与资料范围不匹配。");
+    if (store.directories.some((item) => item.scope === input.scope && item.projectId === input.projectId && item.parentId === input.parentId && item.name === directoryName)) throw new Error("当前目录下已存在同名子目录。");
     const timestamp = now();
-    const directory = { id: `dir_${randomUUID().replaceAll("-", "")}`, name: directoryName, createdAt: timestamp, updatedAt: timestamp } satisfies MaterialDirectory;
+    const directory = { id: `dir_${randomUUID().replaceAll("-", "")}`, name: directoryName, scope: input.scope, projectId: input.scope === "project" ? input.projectId : undefined, parentId: input.parentId, createdAt: timestamp, updatedAt: timestamp } satisfies MaterialDirectory;
     store.directories.push(directory);
     return clone(directory);
   });
@@ -128,13 +143,15 @@ export async function createMaterial(input: { scope: MaterialScope; projectId?: 
   const title = normalizeTitle(input.title);
   const content = normalizeContent(input.content);
   return mutate((store) => {
-    if (input.scope === "public" && input.directoryId && !store.directories.some((item) => item.id === input.directoryId)) throw new Error("公共资料目录不存在。");
+    const directory = input.directoryId ? store.directories.find((item) => item.id === input.directoryId) : undefined;
+    if (input.directoryId && !directory) throw new Error("资料目录不存在。");
+    if (directory && (directory.scope !== input.scope || directory.projectId !== (input.scope === "project" ? input.projectId : undefined))) throw new Error("资料目录与资料范围不匹配。");
     const timestamp = now();
     const material: Material = {
       id: `material_${randomUUID().replaceAll("-", "")}`,
       scope: input.scope,
       projectId: input.scope === "project" ? input.projectId : undefined,
-      directoryId: input.scope === "public" ? input.directoryId : undefined,
+      directoryId: input.directoryId,
       title,
       fileName: input.fileName?.trim().slice(0, 180) || undefined,
       content,
@@ -148,15 +165,17 @@ export async function createMaterial(input: { scope: MaterialScope; projectId?: 
   });
 }
 
-export async function updateMaterial(id: string, input: { title?: string; content?: string; scope?: MaterialScope; projectId?: string; directoryId?: string }) {
+export async function updateMaterial(id: string, input: { title?: string; content?: string; scope?: MaterialScope; projectId?: string; directoryId?: string | null }) {
   return mutate((store) => {
     const material = store.materials.find((item) => item.id === id);
     if (!material) throw new Error("资料不存在。");
     const scope = input.scope ?? material.scope;
     if (material.origin === "system_generated" && scope !== "project") throw new Error("系统整理的项目规范不能移动到公共资料。");
     if (scope === "project" && !(input.projectId ?? material.projectId)) throw new Error("项目资料必须指定项目。");
-    const directoryId = scope === "public" ? input.directoryId ?? material.directoryId : undefined;
-    if (directoryId && !store.directories.some((item) => item.id === directoryId)) throw new Error("公共资料目录不存在。");
+    const directoryId = Object.hasOwn(input, "directoryId") ? input.directoryId ?? undefined : material.directoryId;
+    const directory = directoryId ? store.directories.find((item) => item.id === directoryId) : undefined;
+    if (directoryId && !directory) throw new Error("资料目录不存在。");
+    if (directory && (directory.scope !== scope || directory.projectId !== (scope === "project" ? input.projectId ?? material.projectId : undefined))) throw new Error("资料目录与资料范围不匹配。");
     if (input.title !== undefined) material.title = normalizeTitle(input.title);
     if (input.content !== undefined) material.content = normalizeContent(input.content);
     material.scope = scope;

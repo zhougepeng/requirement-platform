@@ -7,9 +7,10 @@ import type { Project } from "@/lib/types";
 type MaterialScope = "project" | "public";
 type MaterialOrigin = "manual" | "system_generated";
 type Material = { id: string; scope: MaterialScope; projectId?: string; directoryId?: string; title: string; fileName?: string; content: string; origin: MaterialOrigin; sourceRequirementCodes: string[]; createdAt: string; updatedAt: string };
-type Directory = { id: string; name: string; createdAt: string; updatedAt: string };
+type Directory = { id: string; name: string; scope: MaterialScope; projectId?: string; parentId?: string; createdAt: string; updatedAt: string };
 type ApiResponse<T> = { data: T; error?: never } | { data?: never; error: string };
 type Target = { scope: MaterialScope; projectId?: string; directoryId?: string; label: string };
+type DirectoryDraft = { scope: MaterialScope; projectId?: string; parentId?: string; label: string };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
@@ -31,6 +32,18 @@ function titleForFile(name: string) {
   return name.replace(/\.(?:md|txt)$/i, "").trim() || "未命名资料";
 }
 
+function DirectoryBranch({ directory, directories, target, canEdit, depth, onChoose, onCreate }: { directory: Directory; directories: Directory[]; target: Target; canEdit?: boolean; depth: number; onChoose: (next: Target) => void; onCreate: (next: DirectoryDraft) => void }) {
+  const children = directories.filter((item) => item.parentId === directory.id);
+  const isSelected = target.scope === directory.scope && target.projectId === directory.projectId && target.directoryId === directory.id;
+  return <>
+    <div className={`material-tree-row${isSelected ? " is-selected" : ""}`} style={{ paddingLeft: 7 + depth * 12 }}>
+      <button className="material-tree-target" onClick={() => onChoose({ scope: directory.scope, projectId: directory.projectId, directoryId: directory.id, label: directory.name })}><Icon name="folder" /><span>{directory.name}</span></button>
+      {canEdit ? <button className="material-tree-add" onClick={() => onCreate({ scope: directory.scope, projectId: directory.projectId, parentId: directory.id, label: directory.name })} title={`在“${directory.name}”下新建子目录`} aria-label={`在${directory.name}下新建子目录`}><Icon name="plus" /></button> : null}
+    </div>
+    {children.map((child) => <DirectoryBranch key={child.id} directory={child} directories={directories} target={target} canEdit={canEdit} depth={depth + 1} onChoose={onChoose} onCreate={onCreate} />)}
+  </>;
+}
+
 export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; canEdit?: boolean }) {
   const [directories, setDirectories] = useState<Directory[]>([]);
   const [target, setTarget] = useState<Target>(() => projects[0] ? { scope: "project", projectId: projects[0].id, label: projects[0].name } : { scope: "public", label: "公共资料" });
@@ -41,6 +54,10 @@ export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; ca
   const [content, setContent] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
+  const [directoryDraft, setDirectoryDraft] = useState<DirectoryDraft | null>(null);
+  const [directoryName, setDirectoryName] = useState("");
+  const [creatingDirectory, setCreatingDirectory] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   async function loadDirectories() {
@@ -54,7 +71,7 @@ export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; ca
     if (next.directoryId) params.set("directory_id", next.directoryId);
     const result = await request<Material[]>(`/api/v1/materials?${params}`);
     setMaterials(result);
-    setSelected((current) => result.find((item) => item.id === current?.id) ?? result[0] ?? null);
+    setSelected((current) => result.find((item) => item.id === current?.id) ?? null);
   }
 
   useEffect(() => {
@@ -70,14 +87,14 @@ export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; ca
     void request<Material[]>(`/api/v1/materials?${params}`).then((result) => {
       if (!active) return;
       setMaterials(result);
-      setSelected((current) => result.find((item) => item.id === current?.id) ?? result[0] ?? null);
+      setSelected((current) => result.find((item) => item.id === current?.id) ?? null);
     }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法读取资料。"); });
     return () => { active = false; };
   }, [target.scope, target.projectId, target.directoryId]);
 
-  function selectMaterial(next: Material | null) { setSelected(next); setEditing(false); setTitle(next?.title ?? ""); setContent(next?.content ?? ""); }
-  function choose(next: Target) { setError(""); setEditing(false); setTarget(next); }
-  function startNew() { setSelected(null); setTitle(""); setContent(""); setEditing(true); }
+  function selectMaterial(next: Material | null) { setSelected(next); setEditing(false); setUploadMenuOpen(false); setTitle(next?.title ?? ""); setContent(next?.content ?? ""); }
+  function choose(next: Target) { setError(""); setEditing(false); setSelected(null); setUploadMenuOpen(false); setTarget(next); }
+  function startNew() { setSelected(null); setTitle(""); setContent(""); setUploadMenuOpen(false); setEditing(true); }
   function startEdit() { if (selected) { setTitle(selected.title); setContent(selected.content); setEditing(true); } }
 
   async function save() {
@@ -114,10 +131,17 @@ export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; ca
     try { const updated = await request<Material>(`/api/v1/materials/${encodeURIComponent(selected.id)}`, { method: "PATCH", body: JSON.stringify({ scope: "public", directoryId: directory.id }) }); choose({ scope: "public", directoryId: directory.id, label: directory.name }); setSelected(updated); } catch (reason) { setError(reason instanceof Error ? reason.message : "移动资料失败。"); }
   }
 
+  function openCreateDirectory(next: DirectoryDraft) { setDirectoryDraft(next); setDirectoryName(""); setError(""); }
+
   async function createDirectory() {
-    const name = window.prompt("公共资料目录名称");
-    if (!name?.trim()) return;
-    try { const created = await request<Directory>("/api/v1/materials/directories", { method: "POST", body: JSON.stringify({ name }) }); await loadDirectories(); choose({ scope: "public", directoryId: created.id, label: created.name }); } catch (reason) { setError(reason instanceof Error ? reason.message : "新建目录失败。"); }
+    if (!directoryDraft || creatingDirectory || !directoryName.trim()) return;
+    setCreatingDirectory(true); setError("");
+    try {
+      const created = await request<Directory>("/api/v1/materials/directories", { method: "POST", body: JSON.stringify({ name: directoryName, scope: directoryDraft.scope, projectId: directoryDraft.projectId, parentId: directoryDraft.parentId }) });
+      await loadDirectories();
+      choose({ scope: created.scope, projectId: created.projectId, directoryId: created.id, label: created.name });
+      setDirectoryDraft(null);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "新建目录失败。"); } finally { setCreatingDirectory(false); }
   }
 
   async function upload(file: File) {
@@ -131,24 +155,26 @@ export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; ca
     } catch (reason) { setError(reason instanceof Error ? reason.message : "上传资料失败。"); }
   }
 
+  const showDetail = editing || selected !== null;
+
+  const projectDirectories = directories.filter((directory) => directory.scope === "project");
+  const publicDirectories = directories.filter((directory) => directory.scope === "public");
+
   return <section className="material-library">
     <header className="material-library-head"><div><h1>资料库</h1><p>项目资料与公共资料会自动作为需求智能体的补充知识。</p></div></header>
     {error ? <p className="material-error" role="alert">{error}</p> : null}
     <div className="material-library-layout">
       <aside className="material-tree">
         <small>项目资料</small>
-        <div className="material-tree-list">{projects.map((project) => <button key={project.id} className={target.scope === "project" && target.projectId === project.id ? "is-selected" : ""} onClick={() => choose({ scope: "project", projectId: project.id, label: project.name })}><Icon name="folder" /><span>{project.name}</span></button>)}</div>
-        <small>公共资料</small>
-        <div className="material-tree-list">{directories.map((directory) => <button key={directory.id} className={target.scope === "public" && target.directoryId === directory.id ? "is-selected" : ""} onClick={() => choose({ scope: "public", directoryId: directory.id, label: directory.name })}><Icon name="folder" /><span>{directory.name}</span></button>)}</div>
-        {canEdit ? <button className="material-new-directory" onClick={() => void createDirectory()}><Icon name="plus" /> 新建目录</button> : null}
+        <div className="material-tree-list">{projects.map((project) => <div key={project.id}><div className={`material-tree-row${target.scope === "project" && target.projectId === project.id && !target.directoryId ? " is-selected" : ""}`}><button className="material-tree-target" onClick={() => choose({ scope: "project", projectId: project.id, label: project.name })}><Icon name="folder" /><span>{project.name}</span></button>{canEdit ? <button className="material-tree-add" onClick={() => openCreateDirectory({ scope: "project", projectId: project.id, label: project.name })} title={`在“${project.name}”下新建子目录`} aria-label={`在${project.name}下新建子目录`}><Icon name="plus" /></button> : null}</div>{projectDirectories.filter((directory) => directory.projectId === project.id && !directory.parentId).map((directory) => <DirectoryBranch key={directory.id} directory={directory} directories={projectDirectories} target={target} canEdit={canEdit} depth={1} onChoose={choose} onCreate={openCreateDirectory} />)}</div>)}</div>
+        <div className="material-tree-group-head"><small>公共资料</small>{canEdit ? <button className="material-tree-add" onClick={() => openCreateDirectory({ scope: "public", label: "公共资料" })} title="新建公共资料目录" aria-label="新建公共资料目录"><Icon name="plus" /></button> : null}</div>
+        <div className="material-tree-list">{publicDirectories.filter((directory) => !directory.parentId).map((directory) => <DirectoryBranch key={directory.id} directory={directory} directories={publicDirectories} target={target} canEdit={canEdit} depth={0} onChoose={choose} onCreate={openCreateDirectory} />)}</div>
       </aside>
       <section className="material-content">
-        <header className="material-content-head"><div><small>{target.scope === "project" ? "项目资料" : "公共资料"}</small><h2>{target.label}</h2></div>{canEdit ? <div><input ref={fileInput} type="file" accept=".md,.txt,text/markdown,text/plain" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file); event.target.value = ""; }} /><button className="directory-add-button" onClick={() => fileInput.current?.click()} title="上传 Markdown 或文本" aria-label="上传文件"><Icon name="file" /></button><button className="publish-button" onClick={startNew}><Icon name="plus" /> 新建文本</button></div> : null}</header>
-        <div className="material-content-body">
-          <div className="material-list"><div className="material-list-head"><span>名称</span><span>更新时间</span></div>{materials.length ? materials.map((item) => <button key={item.id} className={selected?.id === item.id ? "is-selected" : ""} onClick={() => selectMaterial(item)}><span><b>{item.title}</b>{item.origin === "system_generated" ? <em>系统整理</em> : null}</span><small>{formatTime(item.updatedAt)}</small></button>) : <p>当前没有资料</p>}</div>
-          <article className="material-preview">{editing ? <><label>标题<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="资料标题" maxLength={120} /></label><label>内容<textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="可直接粘贴 Markdown 或文本内容" maxLength={400000} /></label><footer><button className="project-dialog-cancel" onClick={() => { setEditing(false); setTitle(selected?.title ?? ""); setContent(selected?.content ?? ""); }}>取消</button><button className="publish-button" onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存"}</button></footer></> : selected ? <><header><div><h3>{selected.title}</h3>{selected.origin === "system_generated" ? <small>系统根据已上线需求自动整理{selected.sourceRequirementCodes.length ? ` · 来源 ${selected.sourceRequirementCodes.join("、")}` : ""}</small> : <small>{selected.fileName ?? "人工维护"}</small>}</div>{canEdit ? <div>{selected.origin === "manual" ? <button className="icon-button" onClick={() => void move()} title="移动资料" aria-label="移动资料"><Icon name="folder" /></button> : null}<button className="icon-button" onClick={startEdit} title="编辑资料" aria-label="编辑资料"><Icon name="edit" /></button><button className="icon-button material-delete" onClick={() => void remove()} title="删除资料" aria-label="删除资料"><Icon name="trash" /></button></div> : null}</header><pre>{selected.content}</pre></> : <div className="material-preview-empty"><Icon name="file" /><p>选择资料后可在这里查看内容</p></div>}</article>
-        </div>
+        <header className="material-content-head"><div>{showDetail ? <button className="material-back-button" onClick={() => selectMaterial(null)}><Icon name="arrow" /> 资料列表</button> : <small>{target.scope === "project" ? "项目资料" : "公共资料"}</small>}<h2>{showDetail && selected ? selected.title : target.label}</h2></div>{canEdit ? <div className="material-actions"><input ref={fileInput} type="file" accept=".md,.txt,text/markdown,text/plain" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file); event.target.value = ""; }} /><button className="publish-button" onClick={() => setUploadMenuOpen((current) => !current)}><Icon name="plus" /> 上传新资料</button>{uploadMenuOpen ? <div className="material-upload-menu" role="menu"><button role="menuitem" onClick={() => fileInput.current?.click()}><Icon name="file" /> 选择 .md / .txt 文件</button><button role="menuitem" onClick={startNew}><Icon name="edit" /> 直接粘贴文本</button></div> : null}</div> : null}</header>
+        {showDetail ? <article className="material-preview material-detail-view">{editing ? <><label>标题<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="资料标题" maxLength={120} /></label><label>内容<textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="可直接粘贴 Markdown 或文本内容" maxLength={400000} /></label><footer><button className="project-dialog-cancel" onClick={() => { setEditing(false); setTitle(selected?.title ?? ""); setContent(selected?.content ?? ""); }}>取消</button><button className="publish-button" onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存"}</button></footer></> : selected ? <><header><div><h3>{selected.title}</h3>{selected.origin === "system_generated" ? <small>系统根据已上线需求自动整理{selected.sourceRequirementCodes.length ? ` · 来源 ${selected.sourceRequirementCodes.join("、")}` : ""}</small> : <small>{selected.fileName ?? "人工维护"}</small>}</div>{canEdit ? <div>{selected.origin === "manual" ? <button className="icon-button" onClick={() => void move()} title="移动资料" aria-label="移动资料"><Icon name="folder" /></button> : null}<button className="icon-button" onClick={startEdit} title="编辑资料" aria-label="编辑资料"><Icon name="edit" /></button><button className="icon-button material-delete" onClick={() => void remove()} title="删除资料" aria-label="删除资料"><Icon name="trash" /></button></div> : null}</header><pre>{selected.content}</pre></> : null}</article> : <div className="material-list material-list-full"><div className="material-list-head"><span>名称</span><span>更新时间</span></div>{materials.length ? materials.map((item) => <button key={item.id} onClick={() => selectMaterial(item)}><span><b>{item.title}</b>{item.origin === "system_generated" ? <em>系统整理</em> : null}</span><small>{formatTime(item.updatedAt)}</small></button>) : <div className="material-list-empty"><Icon name="file" /><p>当前目录还没有资料</p>{canEdit ? <button className="publish-button" onClick={() => setUploadMenuOpen(true)}><Icon name="plus" /> 上传新资料</button> : null}</div>}</div>}
       </section>
     </div>
+    {directoryDraft ? <div className="material-directory-dialog-backdrop" role="presentation"><form className="material-directory-dialog" onSubmit={(event) => { event.preventDefault(); void createDirectory(); }}><header><div><h3>新建子目录</h3><p>将在“{directoryDraft.label}”下创建。</p></div><button type="button" className="icon-button" onClick={() => setDirectoryDraft(null)} title="关闭" aria-label="关闭"><Icon name="close" /></button></header><label>目录名称<input autoFocus value={directoryName} onChange={(event) => setDirectoryName(event.target.value)} placeholder="例如：交互规范" maxLength={120} /></label><footer><button type="button" className="project-dialog-cancel" onClick={() => setDirectoryDraft(null)}>取消</button><button className="publish-button" disabled={!directoryName.trim() || creatingDirectory}>{creatingDirectory ? "创建中…" : "创建"}</button></footer></form></div> : null}
   </section>;
 }
