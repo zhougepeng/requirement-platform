@@ -3,6 +3,7 @@ import { publisherFromRequest } from "@/services/auth/request-actor";
 import { updateRequirementReleaseStatus } from "@/services/requirement/repository";
 import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 import { scheduleRequirementKnowledgeExtraction } from "@/services/materials/requirement-knowledge-extraction-service";
+import { detachGeneratedMaterialSource } from "@/services/materials/material-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,6 +25,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ re
     });
     scheduleRequirementKnowledgeSync(requirementCode);
     if (updated.status === "online") scheduleRequirementKnowledgeExtraction(requirementCode);
+    else await detachGeneratedMaterialSource(requirementCode);
     return apiJson(updated);
   } catch (error) {
     return apiError(error);

@@ -18,7 +18,7 @@ export class FeishuLoginError extends Error {
   }
 }
 
-function configuration(options: { requireTenantKey?: boolean } = {}) {
+function configuration(options: { requireTenantKey?: boolean; requireRedirectUri?: boolean } = {}) {
   const appId = process.env.FEISHU_APP_ID?.trim();
   const appSecret = process.env.FEISHU_APP_SECRET?.trim();
   const configuredRedirect = process.env.FEISHU_REDIRECT_URI?.trim();
@@ -26,13 +26,15 @@ function configuration(options: { requireTenantKey?: boolean } = {}) {
   const redirectUri = configuredRedirect || (baseUrl ? `${baseUrl}/auth/callback` : "");
   const allowedTenantKey = process.env.FEISHU_ALLOWED_TENANT_KEY?.trim()
     || (process.env.FEISHU_ALLOWED_TENANT_KEYS ?? "").split(",").map((item) => item.trim()).filter(Boolean)[0];
-  if (!appId || !appSecret || !redirectUri || (options.requireTenantKey !== false && !allowedTenantKey))
+  if (!appId || !appSecret || (options.requireRedirectUri !== false && !redirectUri) || (options.requireTenantKey !== false && !allowedTenantKey))
     throw new FeishuLoginError("configuration");
-  try {
-    const parsed = new URL(redirectUri);
-    if (!/^https?:$/.test(parsed.protocol)) throw new Error("protocol");
-  } catch {
-    throw new FeishuLoginError("configuration");
+  if (options.requireRedirectUri !== false) {
+    try {
+      const parsed = new URL(redirectUri);
+      if (!/^https?:$/.test(parsed.protocol)) throw new Error("protocol");
+    } catch {
+      throw new FeishuLoginError("configuration");
+    }
   }
   return { appId, appSecret, redirectUri, allowedTenantKey };
 }
@@ -142,7 +144,7 @@ export async function exchangeCode(code: string) {
 }
 
 export async function getTenantAccessToken() {
-  const { appId, appSecret } = configuration({ requireTenantKey: false });
+  const { appId, appSecret } = configuration({ requireTenantKey: false, requireRedirectUri: false });
   const token = await fetchEnvelope<TenantToken>("tenant access token", `${API}/auth/v3/tenant_access_token/internal`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

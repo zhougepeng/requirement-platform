@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { DemoFrame } from "@/components/demo-frame";
 import { ModelManager } from "@/components/model-manager";
 import { DifyKnowledgeSettings } from "@/components/dify-knowledge-settings";
@@ -45,6 +45,11 @@ type CurrentUser = {
   canPublish?: boolean;
   isAdmin?: boolean;
 };
+type ProjectContextMenu = {
+  project: Project;
+  x: number;
+  y: number;
+} | null;
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -65,6 +70,31 @@ async function fetchRequirementData(requirementCode: string) {
     request<RequirementComment[]>(`/api/v1/requirements/${code}/comments`),
   ]);
   return { detail, versions, comments };
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // HTTP、本地调试或浏览器拒绝剪贴板权限时，继续使用兼容复制方式。
+    }
+  }
+
+  const fallback = document.createElement("textarea");
+  fallback.value = value;
+  fallback.setAttribute("readonly", "");
+  fallback.style.position = "fixed";
+  fallback.style.opacity = "0";
+  fallback.style.pointerEvents = "none";
+  document.body.append(fallback);
+  fallback.focus();
+  fallback.select();
+  fallback.setSelectionRange(0, value.length);
+  const copied = document.execCommand("copy");
+  fallback.remove();
+  if (!copied) throw new Error("复制失败。");
 }
 
 function VersionDiscussion({
@@ -399,21 +429,32 @@ function RequirementBoard({
       return {
         key,
         label: `${date.getMonth() + 1}月`,
-        items: [] as Array<{ projectName: string; requirementName: string }>,
+        onlineItems: [] as Array<{ projectName: string; requirementName: string }>,
+        scheduledItems: [] as Array<{ projectName: string; requirementName: string }>,
       };
     });
     const byMonth = new Map(buckets.map((bucket) => [bucket.key, bucket]));
     for (const project of projects) {
       for (const requirement of project.requirements) {
-        const month = requirement.releaseDate?.slice(0, 7);
-        if (requirement.status !== "online" || !month) continue;
-        byMonth.get(month)?.items.push({
+        const date = requirement.status === "online"
+          ? requirement.releaseDate
+          : requirement.status === "scheduled"
+            ? requirement.scheduledFullDate
+            : undefined;
+        const month = date?.slice(0, 7);
+        if (!month) continue;
+        const item = {
           projectName: project.name,
           requirementName: requirement.title,
-        });
+        };
+        if (requirement.status === "online") byMonth.get(month)?.onlineItems.push(item);
+        if (requirement.status === "scheduled") byMonth.get(month)?.scheduledItems.push(item);
       }
     }
-    return buckets;
+    const firstMonthWithData = buckets.findIndex(
+      (bucket) => bucket.onlineItems.length || bucket.scheduledItems.length,
+    );
+    return firstMonthWithData < 0 ? [] : buckets.slice(firstMonthWithData);
   }, [projects]);
 
   return (
@@ -423,10 +464,6 @@ function RequirementBoard({
           <span className="board-metric-icon"><Icon name="folder" /></span>
           <div><small>项目总数</small><b>{overview.projects}</b></div>
         </div>
-        <div className="board-metric is-ongoing">
-          <span className="board-metric-icon"><Icon name="file" /></span>
-          <div><small>进行中项目</small><b>{overview.ongoingProjects}</b></div>
-        </div>
         <div className="board-metric is-requirements">
           <span className="board-metric-icon"><Icon name="file" /></span>
           <div><small>需求总数</small><b>{overview.requirements}</b></div>
@@ -435,13 +472,17 @@ function RequirementBoard({
           <span className="board-metric-icon"><Icon name="check" /></span>
           <div><small>已上线</small><b>{overview.online}</b></div>
         </div>
-        <div className="board-metric is-scheduled">
+        <div className="board-metric is-ongoing">
           <span className="board-metric-icon"><Icon name="file" /></span>
-          <div><small>已排期</small><b>{overview.scheduled}</b></div>
+          <div><small>进行中项目</small><b>{overview.ongoingProjects}</b></div>
         </div>
         <div className="board-metric is-offline">
           <span className="board-metric-icon"><Icon name="file" /></span>
           <div><small>未上线</small><b>{overview.offline}</b></div>
+        </div>
+        <div className="board-metric is-scheduled">
+          <span className="board-metric-icon"><Icon name="file" /></span>
+          <div><small>已排期</small><b>{overview.scheduled}</b></div>
         </div>
       </div>
       <MonthlyReleaseChart months={monthlyReleases} />
@@ -489,62 +530,60 @@ function MonthlyReleaseChart({
   months: Array<{
     key: string;
     label: string;
-    items: Array<{ projectName: string; requirementName: string }>;
+    onlineItems: Array<{ projectName: string; requirementName: string }>;
+    scheduledItems: Array<{ projectName: string; requirementName: string }>;
   }>;
 }) {
-  const [activeMonth, setActiveMonth] = useState<string | null>(null);
-  const maxCount = Math.max(1, ...months.map((month) => month.items.length));
+  const [activeBar, setActiveBar] = useState<string | null>(null);
+  const maxCount = Math.max(
+    1,
+    ...months.flatMap((month) => [month.onlineItems.length, month.scheduledItems.length]),
+  );
   return (
     <section className="monthly-release-chart">
       <header>
-        <div><Icon name="file" /><b>近 12 个月上线情况</b></div>
-        <small>悬停柱状图查看上线需求</small>
+        <div><Icon name="file" /><b>近 12 个月排期与上线情况</b></div>
+        <small>橙色：已排期 · 蓝色：已上线 · 悬停查看需求</small>
       </header>
-      <div className="monthly-release-bars">
-        {months.map((month) => {
-          const count = month.items.length;
-          const groupedItems = new Map<
-            string,
-            Array<{ projectName: string; requirementName: string }>
-          >();
-          for (const item of month.items) {
-            const items = groupedItems.get(item.projectName) ?? [];
-            items.push(item);
-            groupedItems.set(item.projectName, items);
-          }
-          return (
-            <div className="monthly-release-column" key={month.key}>
-              <div className="monthly-release-track">
-                <button
-                  className={`monthly-release-bar ${count ? "has-data" : ""}`}
-                  style={{ height: `${Math.max(4, (count / maxCount) * 100)}%` }}
-                  onMouseEnter={() => setActiveMonth(month.key)}
-                  onMouseLeave={() => setActiveMonth(null)}
-                  onFocus={() => setActiveMonth(month.key)}
-                  onBlur={() => setActiveMonth(null)}
-                  aria-label={`${month.key} 已上线 ${count} 个需求`}
-                >
-                  {count ? <span>{count}</span> : null}
-                </button>
-                {activeMonth === month.key ? (
-                  <div className="monthly-release-tooltip" role="tooltip">
-                    <b>{month.key} · 已上线 {count} 个需求</b>
-                    {count ? (
-                      Array.from(groupedItems, ([projectName, items]) => (
-                        <div key={projectName}>
-                          <strong>{projectName}</strong>
-                          <ul>{items.map((item) => <li key={`${projectName}-${item.requirementName}`}>{item.requirementName}</li>)}</ul>
-                        </div>
-                      ))
-                    ) : <span>当月暂无上线需求</span>}
-                  </div>
-                ) : null}
-              </div>
-              <small>{month.label}</small>
-            </div>
-          );
-        })}
-      </div>
+      {months.length ? <div className="monthly-release-bars" style={{ gridTemplateColumns: `repeat(${months.length}, minmax(0, 1fr))` }}>
+        {months.map((month) => <div className="monthly-release-column" key={month.key}>
+          <div className="monthly-release-track">
+            {([
+              { kind: "scheduled", label: "已排期", items: month.scheduledItems },
+              { kind: "online", label: "已上线", items: month.onlineItems },
+            ] as const).map((bar) => {
+              const count = bar.items.length;
+              const barId = `${month.key}-${bar.kind}`;
+              const groupedItems = new Map<string, Array<{ projectName: string; requirementName: string }>>();
+              for (const item of bar.items) {
+                const items = groupedItems.get(item.projectName) ?? [];
+                items.push(item);
+                groupedItems.set(item.projectName, items);
+              }
+              return <button
+                className={`monthly-release-bar is-${bar.kind} ${count ? "has-data" : ""}`}
+                key={bar.kind}
+                style={{ height: `${Math.max(4, (count / maxCount) * 100)}%` }}
+                onMouseEnter={() => setActiveBar(barId)}
+                onMouseLeave={() => setActiveBar(null)}
+                onFocus={() => setActiveBar(barId)}
+                onBlur={() => setActiveBar(null)}
+                aria-label={`${month.key} ${bar.label} ${count} 个需求`}
+              >
+                {count ? <span>{count}</span> : null}
+                {activeBar === barId ? <div className="monthly-release-tooltip" role="tooltip">
+                  <b>{month.key} · {bar.label} {count} 个需求</b>
+                  {count ? Array.from(groupedItems, ([projectName, items]) => <div key={projectName}>
+                    <strong>{projectName}</strong>
+                    <ul>{items.map((item) => <li key={`${projectName}-${item.requirementName}`}>{item.requirementName}</li>)}</ul>
+                  </div>) : <span>当月暂无{bar.label}需求</span>}
+                </div> : null}
+              </button>;
+            })}
+          </div>
+          <small>{month.label}</small>
+        </div>)}
+      </div> : <p className="monthly-release-empty">近 12 个月暂无已排期或已上线的需求。</p>}
     </section>
   );
 }
@@ -768,6 +807,7 @@ export function RequirementWorkspace({
   });
   const [tab, setTab] = useState<Tab>("demo");
   const [notice, setNotice] = useState("");
+  const [copyNotice, setCopyNotice] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [splitRatio, setSplitRatio] = useState(0.8);
@@ -779,11 +819,14 @@ export function RequirementWorkspace({
   const [difySettingsRequest, setDifySettingsRequest] = useState(0);
   const [githubUpdateRequest, setGithubUpdateRequest] = useState(0);
   const [personalAccessTokenRequest, setPersonalAccessTokenRequest] = useState(0);
+  const [revealedPersonalAccessToken, setRevealedPersonalAccessToken] = useState("");
   const [publishOpen, setPublishOpen] = useState(false);
   const [snapshotPublishOpen, setSnapshotPublishOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [projectDialogSession, setProjectDialogSession] = useState(0);
+  const [projectContextMenu, setProjectContextMenu] =
+    useState<ProjectContextMenu>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const selectVersion = useCallback((versionId: string) => {
     setSelectedVersionId(versionId);
@@ -893,6 +936,15 @@ export function RequirementWorkspace({
     return () =>
       window.removeEventListener("requirement-open-test-cases", openTestCases);
   }, []);
+
+  useEffect(() => {
+    if (!projectContextMenu) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setProjectContextMenu(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [projectContextMenu]);
 
   useEffect(() => {
     if (!activeProjectId) return;
@@ -1017,8 +1069,13 @@ export function RequirementWorkspace({
   async function copyLink() {
     if (!detail || !selectedVersion) return;
     const url = `${window.location.origin}/r/${detail.requirement.code}${selectedVersion.id === detail.currentVersion.id ? "" : `?v=${selectedVersion.number}`}`;
-    await navigator.clipboard?.writeText(url);
-    showNotice("已复制当前版本链接。");
+    try {
+      await copyText(url);
+      setCopyNotice("链接已复制");
+      window.setTimeout(() => setCopyNotice(""), 2200);
+    } catch {
+      setError("无法自动复制链接，请手动复制浏览器地址。");
+    }
   }
 
   async function handlePublished(result: {
@@ -1076,6 +1133,21 @@ export function RequirementWorkspace({
     setEditingProject(project);
     setProjectDialogSession((current) => current + 1);
     setProjectDialogOpen(true);
+  }
+
+  function openProjectContextMenu(
+    event: MouseEvent<HTMLButtonElement>,
+    project: Project,
+  ) {
+    if (!currentUser.canPublish) return;
+    event.preventDefault();
+    const menuWidth = 168;
+    const menuHeight = project.archivedAt ? 92 : 124;
+    setProjectContextMenu({
+      project,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+    });
   }
 
   function handleProjectSaved(project: Project) {
@@ -1311,7 +1383,9 @@ export function RequirementWorkspace({
                 <button
                   className={`project-nav ${project.id === activeProject?.id && view === "requirements" ? "is-selected" : ""}`}
                   key={project.id}
+                  onContextMenu={(event) => openProjectContextMenu(event, project)}
                   onClick={() => {
+                    setProjectContextMenu(null);
                     setActiveProjectId(project.id);
                     setView("requirements");
                   }}
@@ -1341,7 +1415,9 @@ export function RequirementWorkspace({
               <button
                 className={`project-nav ${project.id === activeProject?.id && view === "requirements" ? "is-selected" : ""} ${project.archivedAt ? "is-archived" : ""}`}
                 key={project.id}
+                onContextMenu={(event) => openProjectContextMenu(event, project)}
                 onClick={() => {
+                  setProjectContextMenu(null);
                   setActiveProjectId(project.id);
                   setView("requirements");
                 }}
@@ -1354,6 +1430,44 @@ export function RequirementWorkspace({
               </button>
             ))}
           </nav>
+          {projectContextMenu ? (
+            <>
+              <button
+                className="project-context-menu-dismiss"
+                aria-label="关闭项目操作菜单"
+                onClick={() => setProjectContextMenu(null)}
+              />
+              <div
+                className="project-context-menu"
+                style={{ left: projectContextMenu.x, top: projectContextMenu.y }}
+                role="menu"
+              >
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    const project = projectContextMenu.project;
+                    setProjectContextMenu(null);
+                    openEditProject(project);
+                  }}
+                >
+                  <Icon name="edit" />
+                  <span>重命名</span>
+                </button>
+                <button
+                  className={projectContextMenu.project.archivedAt ? "" : "is-danger"}
+                  role="menuitem"
+                  onClick={() => {
+                    const project = projectContextMenu.project;
+                    setProjectContextMenu(null);
+                    void toggleProjectArchive(project);
+                  }}
+                >
+                  <Icon name={projectContextMenu.project.archivedAt ? "refresh" : "trash"} />
+                  <span>{projectContextMenu.project.archivedAt ? "恢复项目" : "作废项目"}</span>
+                </button>
+              </div>
+            </>
+          ) : null}
           <div className="sidebar-footer">
             {currentUser.isAdmin ? (
               <EmployeeManager
@@ -1390,6 +1504,8 @@ export function RequirementWorkspace({
               <PersonalAccessTokenManager
                 key={`personal-access-token-${personalAccessTokenRequest}`}
                 initialOpen={personalAccessTokenRequest > 0}
+                revealedToken={revealedPersonalAccessToken}
+                onRevealToken={setRevealedPersonalAccessToken}
                 onClose={() => setPersonalAccessTokenRequest(0)}
               />
             ) : null}
@@ -1706,6 +1822,12 @@ export function RequirementWorkspace({
                 {notice}
               </div>
             )}
+            {copyNotice ? (
+              <div className="copy-toast" role="status" aria-live="polite">
+                <Icon name="check" />
+                {copyNotice}
+              </div>
+            ) : null}
             {error && <div className="notice error-notice">{error}</div>}
             {tab === "versions" ? (
               <VersionAssetsPanel
@@ -1836,7 +1958,7 @@ export function RequirementWorkspace({
                     <b>{selectedVersion!.publishedAt}</b>
                   </div>
                   <div>
-                    <span>发布人</span>
+                  <span>更新人</span>
                     <b>{selectedVersion!.publisher}</b>
                   </div>
                   <div>

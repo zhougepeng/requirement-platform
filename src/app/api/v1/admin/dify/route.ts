@@ -6,6 +6,7 @@ import { DifyKnowledgeClient } from "@/services/assistant/dify-knowledge-client"
 import { listKnowledgeSyncEntries, syncExistingKnowledge } from "@/services/assistant/knowledge-sync-service";
 import { listMaterialKnowledgeSyncEntries, syncAllMaterialKnowledge } from "@/services/materials/material-knowledge-sync-service";
 import { adminFromRequest } from "@/services/auth/request-actor";
+import { listRequirementKnowledgeExtractionFailures, retryRequirementKnowledgeExtraction } from "@/services/materials/requirement-knowledge-extraction-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,14 +16,15 @@ const configurationSchema = z.object({
   datasetId: z.string().trim().min(1).max(240),
   apiKey: z.string().trim().min(1).max(4000),
 });
-const actionSchema = z.object({ action: z.enum(["verify", "sync"]) });
+const actionSchema = z.object({ action: z.enum(["verify", "sync", "retry-extraction"]), requirementCode: z.string().trim().optional() });
 
 async function settingsPayload() {
-  const [entries, materialEntries] = await Promise.all([listKnowledgeSyncEntries(), listMaterialKnowledgeSyncEntries()]);
+  const [entries, materialEntries, extractionFailures] = await Promise.all([listKnowledgeSyncEntries(), listMaterialKnowledgeSyncEntries(), listRequirementKnowledgeExtractionFailures()]);
   const failed = [...entries, ...materialEntries].filter((entry) => entry.lastError);
   return {
     ...getDifyKnowledgeSettings(),
     sync: { totalDocuments: entries.length + materialEntries.length, failedDocuments: failed.length, lastError: failed[0]?.lastError },
+    extractionFailures,
   };
 }
 
@@ -48,10 +50,15 @@ export async function PUT(request: Request) {
 export async function POST(request: Request) {
   try {
     await adminFromRequest(request);
-    const { action } = actionSchema.parse(await request.json());
+    const { action, requirementCode } = actionSchema.parse(await request.json());
     if (action === "verify") {
       const result = await new DifyKnowledgeClient().verifyConnection();
       return apiJson({ ...(await settingsPayload()), verification: result });
+    }
+    if (action === "retry-extraction") {
+      if (!requirementCode) throw new Error("请选择需要重试的需求。");
+      await retryRequirementKnowledgeExtraction(requirementCode);
+      return apiJson(await settingsPayload());
     }
     const [requirements, materials] = await Promise.all([syncExistingKnowledge(), syncAllMaterialKnowledge()]);
     return apiJson({ ...(await settingsPayload()), syncResult: { requirements, materials } });

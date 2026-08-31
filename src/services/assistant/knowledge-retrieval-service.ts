@@ -104,7 +104,7 @@ function materialSource(material: Material, documentId: string, projectNames: Ma
   };
 }
 
-function filterMaterialHits(hits: DifyRetrievedChunk[], materials: Material[], entries: Awaited<ReturnType<typeof listMaterialKnowledgeSyncEntries>>, input: Input, projectNames: Map<string, string>) {
+function filterMaterialHits(hits: DifyRetrievedChunk[], materials: Material[], entries: Awaited<ReturnType<typeof listMaterialKnowledgeSyncEntries>>, input: Input, projectNames: Map<string, string>, requirementSources: Awaited<ReturnType<typeof listCurrentRequirementKnowledgeSources>>) {
   const documentIds = new Map(entries.flatMap((entry) => entry.documentId ? [[entry.documentId, entry.materialId] as const] : []));
   const materialById = new Map(materials.map((item) => [item.id, item]));
   const visible = new Map<string, RetrievedKnowledgeSource>();
@@ -112,6 +112,10 @@ function filterMaterialHits(hits: DifyRetrievedChunk[], materials: Material[], e
   for (const hit of hits) {
     const material = materialById.get(documentIds.get(hit.documentId) ?? "");
     if (!material) continue;
+    if (material.origin === "system_generated") {
+      const onlineCodes = new Set(requirementSources.filter((source) => source.status === "online").map((source) => source.requirementCode));
+      if (!material.sourceRequirementCodes.some((code) => onlineCodes.has(code))) continue;
+    }
     const visibleInScope = material.scope === "public"
       || input.scope === "all-published"
       || (input.scope === "current-project" && material.projectId === input.projectId)
@@ -152,7 +156,7 @@ export async function retrieveProductKnowledge(input: Input): Promise<KnowledgeR
 
   // 普通查询也要能提示相关规划，但“当前已支持”的判断只由回答层依据已上线来源给出。
   const requirementMatched = filterHits(hits, scopedSources, entries, new Set(["online", "scheduled", "offline"]));
-  const materialMatched = filterMaterialHits(hits, materials, materialEntries, input, new Map(projects.map((project) => [project.id, project.name])));
+  const materialMatched = filterMaterialHits(hits, materials, materialEntries, input, new Map(projects.map((project) => [project.id, project.name])), allRequirementSources);
   const matched = {
     chunks: limitChunks([...requirementMatched.chunks, ...materialMatched.chunks]),
     sources: [...requirementMatched.sources, ...materialMatched.sources],

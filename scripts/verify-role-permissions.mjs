@@ -150,6 +150,25 @@ try {
   expect(typeof requirementCode === "string" && requirementCode.length > 0, "发布需求响应缺少需求编号。");
   expect(publishedPayload.data?.requirement?.owner === "publisher", "个人访问令牌发布需求未归属到真实发布人。");
 
+  const snapshotArchive = new AdmZip();
+  snapshotArchive.addFile("PRD.md", Buffer.from("# 主 PRD\n\n兼容旧发布端。", "utf8"));
+  snapshotArchive.addFile("prd/01-下单.md", Buffer.from("# 下单\n\n支持提交订单。", "utf8"));
+  snapshotArchive.addFile("prd/02-支付.md", Buffer.from("# 支付\n\n支持支付确认。", "utf8"));
+  snapshotArchive.addFile("demo/index.html", Buffer.from("<!doctype html><title>snapshot demo</title>", "utf8"));
+  const snapshotForm = new FormData();
+  snapshotForm.append("archive", new Blob([snapshotArchive.toBuffer()], { type: "application/zip" }), "multi-prd.zip");
+  snapshotForm.append("change_summary", "多 PRD 快照回归测试。");
+  const snapshotPublished = await request(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/versions`, undefined, {
+    method: "POST",
+    headers: tokenHeaders,
+    body: snapshotForm,
+  });
+  expect(snapshotPublished.status === 201, `多 PRD 快照无法发布（HTTP ${snapshotPublished.status}）。`);
+  const snapshotPayload = await snapshotPublished.json();
+  const snapshotPrds = (snapshotPayload.data?.version?.documents || []).filter((item) => item.kind === "prd");
+  expect(snapshotPrds.length === 2, `多 PRD 快照应展示 2 个目录项，实际为 ${snapshotPrds.length}。`);
+  expect(snapshotPrds.map((item) => item.path).join("|") === "prd/01-下单.md|prd/02-支付.md", "多 PRD 快照目录项或顺序不正确。");
+
   const createdGap = await request(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/gaps`, "viewer", {
     method: "POST",
     headers: { "content-type": "application/json" },

@@ -170,7 +170,9 @@ async function parseSnapshotArchive(file: File) {
 }
 
 function documentsForSnapshot(entries: Array<{ path: string; data: Buffer }>, projectCode: string, requirementCode: string, versionNo: number): RequirementDocument[] {
-  const prds = entries.filter((entry) => /^PRD\.md$/i.test(entry.path) || /^prd\/.+\.(?:md|markdown)$/i.test(entry.path)).toSorted((a, b) => a.path.localeCompare(b.path));
+  const nestedPrds = entries.filter((entry) => /^prd\/.+\.(?:md|markdown)$/i.test(entry.path)).toSorted((a, b) => a.path.localeCompare(b.path));
+  // 根目录 PRD.md 是给旧版发布端的兼容副本；已有 prd/ 多文件时不再把它展示成重复目录项。
+  const prds = nestedPrds.length ? nestedPrds : entries.filter((entry) => /^PRD\.md$/i.test(entry.path));
   const demos = entries.filter((entry) => entry.path.startsWith("demo/") && /\.html?$/i.test(entry.path)).toSorted((a, b) => a.path.localeCompare(b.path));
   const base = `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/`;
   return [
@@ -313,6 +315,7 @@ function projectWithRequirementSummaries(store: RequirementStore, project: Proje
       createdAt: requirement.createdAt ?? summary.createdAt,
       updatedAt: requirement.updatedAt ?? summary.updatedAt,
       owner: requirement.owner ?? summary.owner ?? currentVersion?.publisher,
+      ownerId: requirement.ownerId ?? summary.ownerId,
       status: releaseStatusOf(requirement),
       releaseVersion: requirement.releaseVersion,
       releaseDate: requirement.releaseDate,
@@ -1066,9 +1069,9 @@ export async function publishRequirement(input: PublishRequirementInput) {
     let requirement = store.requirements.find((item) => item.code === requirementCode);
     if (requirement?.archivedAt) throw new Error("已作废需求不能发布新版本，请先恢复需求。");
     if (!requirement) {
-      requirement = { id: requirementCode, projectId: project.id, code: requirementCode, title, currentVersionId: "", createdAt: now(), updatedAt: now(), owner: input.actor?.name || "张三（本地开发身份）", status: "offline" };
+      requirement = { id: requirementCode, projectId: project.id, code: requirementCode, title, currentVersionId: "", createdAt: now(), updatedAt: now(), owner: input.actor?.name || "张三（本地开发身份）", ownerId: input.actor?.id, status: "offline" };
       store.requirements.push(requirement);
-      project.requirements.push({ code: requirementCode, title, latestVersion: 0, createdAt: requirement.createdAt, updatedAt: requirement.updatedAt, owner: requirement.owner, status: "offline" });
+      project.requirements.push({ code: requirementCode, title, latestVersion: 0, createdAt: requirement.createdAt, updatedAt: requirement.updatedAt, owner: requirement.owner, ownerId: requirement.ownerId, status: "offline" });
     }
     if (requirement.projectId !== project.id) throw new Error("需求编码已属于另一个项目。");
 
@@ -1093,6 +1096,11 @@ export async function publishRequirement(input: PublishRequirementInput) {
     store.versions.push(version);
     requirement.title = title;
     requirement.currentVersionId = version.id;
+    // 每次发布新版本都由当前操作者接手维护，负责人和版本更新人保持一致。
+    if (input.actor) {
+      requirement.owner = input.actor.name;
+      requirement.ownerId = input.actor.id;
+    }
     requirement.updatedAt = version.publishedAt;
     const summary = project.requirements.find((item) => item.code === requirementCode);
     if (summary) {
@@ -1101,6 +1109,7 @@ export async function publishRequirement(input: PublishRequirementInput) {
       summary.createdAt = requirement.createdAt;
       summary.updatedAt = requirement.updatedAt;
       summary.owner = requirement.owner ?? version.publisher;
+      summary.ownerId = requirement.ownerId;
     }
     project.updatedAt = version.publishedAt.slice(0, 10);
     return clone({ requirement, version, url: `/r/${requirementCode}` });
@@ -1132,8 +1141,9 @@ export async function publishRequirementSnapshot(input: PublishRequirementSnapsh
   if (!changeSummary || changeSummary.length > 1000) throw new Error("版本说明不能为空且不能超过 1000 字。");
   const entries = await parseSnapshotArchive(input.archive);
   const manifest = await snapshotFromEntries(entries);
-  const prd = entries.find((entry) => entry.path === "PRD.md")?.data.toString("utf8").trim();
-  if (!prd) throw new Error("PRD.md 不能为空。");
+  const primaryPrd = entries.find((entry) => entry.path === "PRD.md") ?? entries.filter((entry) => /^prd\/.+\.(?:md|markdown)$/i.test(entry.path)).toSorted((left, right) => left.path.localeCompare(right.path))[0];
+  const prd = primaryPrd?.data.toString("utf8").trim();
+  if (!prd) throw new Error("PRD.md 或 prd/ 下的首个 Markdown 不能为空。");
   return mutate(async (store) => {
     const requirement = store.requirements.find((item) => item.code === requirementCode);
     if (!requirement) throw new Error("需求不存在。");
@@ -1148,8 +1158,12 @@ export async function publishRequirementSnapshot(input: PublishRequirementSnapsh
       requirement.currentVersionId = version.id;
       requirement.updatedAt = version.publishedAt;
       requirement.title = requirement.title;
+      if (input.actor) {
+        requirement.owner = input.actor.name;
+        requirement.ownerId = input.actor.id;
+      }
       const summary = project.requirements.find((item) => item.code === requirementCode);
-      if (summary) { summary.latestVersion = number; summary.updatedAt = version.publishedAt; summary.owner = requirement.owner ?? version.publisher; }
+      if (summary) { summary.latestVersion = number; summary.updatedAt = version.publishedAt; summary.owner = requirement.owner ?? version.publisher; summary.ownerId = requirement.ownerId; }
       project.updatedAt = version.publishedAt.slice(0, 10);
     }
     return clone({ requirement, version, url: `/r/${requirementCode}` });
@@ -1183,8 +1197,12 @@ export async function restoreRequirementVersion(requirementCode: string, sourceV
     store.versions.push(version);
     requirement.currentVersionId = version.id;
     requirement.updatedAt = version.publishedAt;
+    if (actor) {
+      requirement.owner = actor.name;
+      requirement.ownerId = actor.id;
+    }
     const summary = project.requirements.find((item) => item.code === requirementCode);
-    if (summary) { summary.latestVersion = number; summary.updatedAt = version.publishedAt; summary.owner = requirement.owner ?? version.publisher; }
+    if (summary) { summary.latestVersion = number; summary.updatedAt = version.publishedAt; summary.owner = requirement.owner ?? version.publisher; summary.ownerId = requirement.ownerId; }
     project.updatedAt = version.publishedAt.slice(0, 10);
     return clone({ requirement, version, url: `/r/${requirementCode}` });
   });

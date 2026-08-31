@@ -79,6 +79,8 @@ export type RequirementSummary = {
   createdAt?: string;
   updatedAt?: string;
   owner?: string;
+  /** Feishu open_id for ownership checks. Legacy records may not have it. */
+  ownerId?: string;
   archivedAt?: string;
   archivedBy?: string;
   status?: "offline" | "scheduled" | "online";
@@ -96,6 +98,8 @@ export type Project = {
   createdAt?: string;
   updatedAt: string;
   owner?: string;
+  /** Feishu open_id for ownership checks. Legacy records may not have it. */
+  ownerId?: string;
   archivedAt?: string;
   archivedBy?: string;
   requirements: RequirementSummary[];
@@ -110,6 +114,8 @@ export type Requirement = {
   createdAt: string;
   updatedAt: string;
   owner?: string;
+  /** Feishu open_id for ownership checks. Legacy records may not have it. */
+  ownerId?: string;
   archivedAt?: string;
   archivedBy?: string;
   status?: "offline" | "scheduled" | "online";

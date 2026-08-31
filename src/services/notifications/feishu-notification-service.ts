@@ -2,7 +2,7 @@ import "server-only";
 
 import type { NotificationTarget } from "@/lib/release-notification";
 import { listEmployees } from "@/services/auth/employee-store";
-import { getTenantAccessToken } from "@/services/auth/feishu-auth";
+import { FeishuLoginError, getTenantAccessToken } from "@/services/auth/feishu-auth";
 import {
   fetchFeishuEmployees,
   listFeishuDepartmentMemberOpenIds,
@@ -25,6 +25,19 @@ export class FeishuNotificationError extends Error {
 
 function readableError(payload: FeishuEnvelope<unknown>, status: number) {
   return `飞书通知发送失败（${payload.code ?? status}${payload.msg ? `：${payload.msg}` : ""}）。`;
+}
+
+function readableTargetError(payload: FeishuEnvelope<unknown>, status: number) {
+  if (payload.code === 99991672) {
+    return "飞书应用未开通群聊读取权限；可在开放平台开通 im:chat:readonly 后重试，也可改选人员、部门或全员。";
+  }
+  return `飞书群聊读取失败（${payload.code ?? status}${payload.msg ? `：${payload.msg}` : ""}）。`;
+}
+
+function readableCatalogFailure(error: unknown) {
+  if (error instanceof FeishuLoginError && error.kind === "configuration")
+    return "飞书消息服务尚未配置：请在运行服务的 .env.local 中填写 FEISHU_APP_ID 和 FEISHU_APP_SECRET 后重启服务。";
+  return error instanceof Error ? error.message : "飞书数据读取失败。";
 }
 
 async function sendText(token: string, receiveIdType: "open_id" | "chat_id", receiveId: string, content: string) {
@@ -54,7 +67,7 @@ async function chatTargets(token: string): Promise<NotificationTargetOption[]> {
     if (pageToken) url.searchParams.set("page_token", pageToken);
     const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal: AbortSignal.timeout(20_000) });
     const payload = await response.json().catch(() => ({})) as FeishuEnvelope<{ items?: Array<{ chat_id?: string; name?: string }>; has_more?: boolean; page_token?: string }>;
-    if (!response.ok || payload.code !== 0) throw new FeishuNotificationError(`飞书群聊读取失败（${payload.code ?? response.status}${payload.msg ? `：${payload.msg}` : ""}）。`);
+    if (!response.ok || payload.code !== 0) throw new FeishuNotificationError(readableTargetError(payload, response.status));
     for (const item of payload.data?.items ?? []) {
       if (item.chat_id && item.name) result.push({ id: item.chat_id, kind: "chat", name: item.name });
     }
@@ -74,14 +87,14 @@ export async function listFeishuNotificationTargets(): Promise<NotificationTarge
   ];
   const warnings: string[] = [];
   const departments = await listFeishuNotificationDepartments().catch((error) => {
-    warnings.push(`部门暂不可选：${error instanceof Error ? error.message : "飞书组织架构读取失败。"}`);
+    warnings.push(`部门暂不可选：${readableCatalogFailure(error)}`);
     return [];
   });
   let chats: NotificationTargetOption[] = [];
   try {
     chats = await chatTargets(await getTenantAccessToken());
   } catch (error) {
-    warnings.push(`群聊暂不可选：${error instanceof Error ? error.message : "飞书群聊读取失败。"}`);
+    warnings.push(`群聊暂不可选：${readableCatalogFailure(error)}`);
   }
   return {
     targets: [

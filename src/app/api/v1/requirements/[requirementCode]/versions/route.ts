@@ -1,6 +1,6 @@
 import { apiError, apiJson } from "@/lib/api-response";
-import { listVersions, publishRequirementSnapshot } from "@/services/requirement/repository";
-import { actorFromRequest, publisherFromRequest } from "@/services/auth/request-actor";
+import { getRequirementDetail, listVersions, publishRequirementSnapshot } from "@/services/requirement/repository";
+import { actorFromRequest, isAdministratorActor, publisherFromRequest } from "@/services/auth/request-actor";
 import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 
 export const runtime = "nodejs";
@@ -20,6 +20,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ req
   try {
     const actor = await publisherFromRequest(request);
     const { requirementCode } = await params;
+    const detail = await getRequirementDetail(requirementCode);
+    if (!(await isAdministratorActor(actor)) && detail.requirement.ownerId !== actor.id)
+      throw new Error("只能更新自己负责的需求；请使用该负责人的个人访问令牌，或由管理员操作。");
     const formData = await request.formData();
     const archive = formData.get("archive");
     const changeSummary = formData.get("change_summary");

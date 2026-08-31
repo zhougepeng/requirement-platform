@@ -30,11 +30,56 @@ async function apiRequest<T>(url: string, init?: RequestInit): Promise<T> {
   return payload.data as T;
 }
 
+function targetKindLabel(target: NotificationTarget) {
+  return target.kind === "user" ? "个人" : target.kind === "chat" ? "群聊" : target.kind === "department" ? "部门" : "全员";
+}
+
+function matchesTarget(target: NotificationTarget, query: string) {
+  const value = query.trim().toLocaleLowerCase();
+  return !value || `${target.name} ${targetKindLabel(target)}`.toLocaleLowerCase().includes(value);
+}
+
+function TargetSelectionDialog({ targets, options, onConfirm, onClose }: { targets: NotificationTarget[]; options: NotificationTarget[]; onConfirm: (targets: NotificationTarget[]) => void; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(targets);
+  const candidates = options.filter((target) => matchesTarget(target, query));
+  function toggle(target: NotificationTarget) {
+    setSelected((current) => current.some((item) => keyOf(item) === keyOf(target))
+      ? current.filter((item) => keyOf(item) !== keyOf(target))
+      : [...current, target]);
+  }
+  return createPortal(<div className="release-status-dialog-layer target-picker-dialog-layer" onClick={onClose}>
+    <button className="release-status-dialog-backdrop" aria-label="关闭选择联系人" />
+    <section className="target-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="target-picker-title" onClick={(event) => event.stopPropagation()}>
+      <header><h2 id="target-picker-title">选择联系人</h2><button type="button" className="release-status-close" onClick={onClose} aria-label="关闭"><Icon name="close" /></button></header>
+      <div className="target-picker-dialog-body">
+        <section className="target-picker-candidates">
+          <label className="target-picker-search"><Icon name="search" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索用户、群组、部门或全员" autoFocus /></label>
+          <small>可选对象</small>
+          <div className="target-picker-option-list">{candidates.length ? candidates.map((target) => {
+            const checked = selected.some((item) => keyOf(item) === keyOf(target));
+            return <button type="button" className={checked ? "is-selected" : ""} key={keyOf(target)} onClick={() => toggle(target)}><span className={`target-picker-option-icon is-${target.kind}`}><Icon name={target.kind === "chat" ? "message" : "users"} /></span><span><b>{target.name}</b><small>{targetKindLabel(target)}</small></span><i>{checked ? "✓" : "+"}</i></button>;
+          }) : <p>没有匹配的通知对象</p>}</div>
+        </section>
+        <section className="target-picker-selected"><b>已选：{selected.length} 个</b>{selected.length ? <div>{selected.map((target) => <span className="release-notification-chip" key={keyOf(target)}><small>{targetKindLabel(target)}</small>{target.name}<button type="button" onClick={() => toggle(target)} aria-label={`移除 ${target.name}`}>×</button></span>)}</div> : <p>从左侧搜索并选择通知对象</p>}</section>
+      </div>
+      <footer><button type="button" className="release-status-cancel" onClick={onClose}>取消</button><button type="button" className="release-status-confirm" onClick={() => { onConfirm(selected); onClose(); }}>确认</button></footer>
+    </section>
+  </div>, document.body);
+}
+
 function TargetPicker({ targets, options, disabled, onChange }: { targets: NotificationTarget[]; options: NotificationTarget[]; disabled?: boolean; onChange: (next: NotificationTarget[]) => void }) {
-  const [selected, setSelected] = useState("");
+  const [query, setQuery] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const available = options.filter((option) => !targets.some((target) => keyOf(target) === keyOf(option)));
-  function add(value: string) { setSelected(""); const option = options.find((item) => keyOf(item) === value); if (option) onChange([...targets, option]); }
-  return <div className="release-notification-targets"><div className="release-notification-chips">{targets.length ? targets.map((target) => <span className="release-notification-chip" key={keyOf(target)}><small>{target.kind === "user" ? "个人" : target.kind === "chat" ? "群" : target.kind === "department" ? "部门" : "全员"}</small>{target.name}<button type="button" disabled={disabled} onClick={() => onChange(targets.filter((item) => keyOf(item) !== keyOf(target)))} aria-label={`移除 ${target.name}`}>×</button></span>) : <span className="release-notification-empty">尚未选择通知对象</span>}</div><select className="release-notification-target-select" value={selected} disabled={disabled || !available.length} onChange={(event) => add(event.target.value)} aria-label="新增通知对象"><option value="">+ 添加个人、群、部门或全员</option>{available.map((option) => <option key={keyOf(option)} value={keyOf(option)}>{option.kind === "user" ? "个人" : option.kind === "chat" ? "群" : option.kind === "department" ? "部门" : "全员"} · {option.name}</option>)}</select></div>;
+  const matches = available.filter((target) => matchesTarget(target, query)).slice(0, 8);
+  function add(target: NotificationTarget) { onChange([...targets, target]); setQuery(""); }
+  return <div className="release-notification-targets">
+    <div className="release-notification-chips">{targets.length ? targets.map((target) => <span className="release-notification-chip" key={keyOf(target)}><small>{targetKindLabel(target)}</small>{target.name}<button type="button" disabled={disabled} onClick={() => onChange(targets.filter((item) => keyOf(item) !== keyOf(target)))} aria-label={`移除 ${target.name}`}>×</button></span>) : <span className="release-notification-empty">尚未选择通知对象</span>}</div>
+    <div className="release-notification-target-search"><Icon name="search" /><input value={query} disabled={disabled} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && matches.length === 1) { event.preventDefault(); add(matches[0]); } }} placeholder="搜索用户、群聊、部门或全员" aria-label="搜索通知对象" /><button type="button" disabled={disabled} onClick={() => setPickerOpen(true)} aria-label="打开通知对象选择器" title="选择通知对象"><Icon name="plus" /></button></div>
+    {query.trim() ? <div className="release-notification-target-results" role="listbox">{matches.length ? matches.map((target) => <button type="button" role="option" aria-selected={false} key={keyOf(target)} onClick={() => add(target)}><span><b>{target.name}</b><small>{targetKindLabel(target)}</small></span><Icon name="plus" /></button>) : <p>没有匹配的通知对象</p>}</div> : null}
+    {pickerOpen ? <TargetSelectionDialog targets={targets} options={options} onConfirm={onChange} onClose={() => setPickerOpen(false)} /> : null}
+  </div>;
 }
 
 export function RequirementReleaseStatus({ requirement, requirementCode, projectId, canEdit, compact = false, onChange }: { requirement: RequirementWithStatus; requirementCode: string; projectId: string; canEdit?: boolean; compact?: boolean; onChange: (input: UpdateRequirementReleaseStatusInput) => Promise<void> }) {
@@ -104,14 +149,14 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
   async function confirmStatus() {
     if (!dialogKind || saving) return;
     if (!valid(dialogKind)) { setError(dialogKind === "online" ? "请填写上线版本和上线时间。" : "请填写排期版本、预计灰度时间和预计全量时间。"); return; }
-    if (notifyEnabled && !targets.length) { setError("请至少选择一个飞书通知对象，或取消发送通知。"); return; }
     setSaving(true); setError("");
     try {
       await onChange(payload(dialogKind));
       void apiRequest(`/api/v1/projects/${encodeURIComponent(projectId)}/release-notification-preference`, { method: "PATCH", body: JSON.stringify({ enabled: notifyEnabled, targets }) }).catch(() => undefined);
       const kind = dialogKind;
       setDialogKind(null);
-      if (notifyEnabled) { setNotificationKind(kind); void buildDraft(kind); }
+      if (notifyEnabled && targets.length) { setNotificationKind(kind); void buildDraft(kind); }
+      else if (notifyEnabled) setNotice(`${actionLabel(kind)}已保存，暂未发送通知：暂无可用通知对象。`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : `保存${actionLabel(dialogKind)}信息失败。`); } finally { setSaving(false); }
   }
 

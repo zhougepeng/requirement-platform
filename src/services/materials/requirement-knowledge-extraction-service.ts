@@ -51,6 +51,21 @@ async function clearFailure(requirementCode: string) {
   await writeStore(store);
 }
 
+export async function listRequirementKnowledgeExtractionFailures() {
+  return (await readStore()).failures.toSorted((left, right) => right.failedAt.localeCompare(left.failedAt));
+}
+
+export async function retryRequirementKnowledgeExtraction(requirementCode: string) {
+  const normalized = requirementCode.trim();
+  if (!normalized) throw new Error("需求编号不能为空。");
+  try {
+    return await extractRequirementProjectKnowledge(normalized);
+  } catch (error) {
+    await markFailure(normalized, error).catch(() => undefined);
+    throw error;
+  }
+}
+
 function parse(raw: string): Extraction | undefined {
   const payload = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? raw;
   const start = payload.indexOf("{");

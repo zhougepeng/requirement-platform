@@ -15,6 +15,8 @@ export type Material = {
   fileName?: string;
   content: string;
   origin: MaterialOrigin;
+  /** 人工编辑过的系统整理资料不再被自动提取结果覆盖。 */
+  userManaged?: boolean;
   sourceRequirementCodes: string[];
   createdAt: string;
   updatedAt: string;
@@ -55,7 +57,12 @@ async function readStore(): Promise<MaterialStore> {
     const parsed = JSON.parse(await readFile(STORE_FILE, "utf8")) as Partial<MaterialStore>;
     return {
       schemaVersion: 1,
-      materials: Array.isArray(parsed.materials) ? parsed.materials.filter((item): item is Material => Boolean(item?.id && item.title && item.content && (item.scope === "project" || item.scope === "public"))) : [],
+      materials: Array.isArray(parsed.materials) ? parsed.materials.filter((item): item is Material => Boolean(item?.id && item.title && item.content && (item.scope === "project" || item.scope === "public"))).map((item) => ({
+        ...item,
+        origin: item.origin === "system_generated" ? "system_generated" : "manual",
+        userManaged: item.userManaged === true,
+        sourceRequirementCodes: Array.isArray(item.sourceRequirementCodes) ? item.sourceRequirementCodes.filter((code): code is string => typeof code === "string") : [],
+      })) : [],
       directories: Array.isArray(parsed.directories) ? parsed.directories.flatMap((item) => {
         if (!item?.id || !item.name) return [];
         return [{
@@ -178,6 +185,7 @@ export async function updateMaterial(id: string, input: { title?: string; conten
     if (directory && (directory.scope !== scope || directory.projectId !== (scope === "project" ? input.projectId ?? material.projectId : undefined))) throw new Error("资料目录与资料范围不匹配。");
     if (input.title !== undefined) material.title = normalizeTitle(input.title);
     if (input.content !== undefined) material.content = normalizeContent(input.content);
+    if (input.title !== undefined || input.content !== undefined) material.userManaged = true;
     material.scope = scope;
     material.projectId = scope === "project" ? input.projectId ?? material.projectId : undefined;
     material.directoryId = directoryId;
@@ -194,13 +202,34 @@ export async function deleteMaterial(id: string) {
   });
 }
 
+/** 状态回退时解除该需求对自动整理资料的来源绑定，避免后续再次沿用失效事实。 */
+export async function detachGeneratedMaterialSource(sourceRequirementCode: string) {
+  return mutate((store) => {
+    let changed = 0;
+    for (const material of store.materials) {
+      if (material.origin !== "system_generated" || !material.sourceRequirementCodes.includes(sourceRequirementCode)) continue;
+      material.sourceRequirementCodes = material.sourceRequirementCodes.filter((code) => code !== sourceRequirementCode);
+      material.updatedAt = now();
+      changed += 1;
+    }
+    return changed;
+  });
+}
+
 export async function upsertGeneratedMaterial(input: { projectId: string; title: string; content: string; sourceRequirementCode: string }) {
   const title = normalizeTitle(input.title);
   const content = normalizeContent(input.content);
   return mutate((store) => {
     const existing = store.materials.find((item) => item.scope === "project" && item.projectId === input.projectId && item.origin === "system_generated" && item.title === title);
     if (existing) {
-      if (existing.content === content && existing.sourceRequirementCodes.includes(input.sourceRequirementCode)) return { material: clone(existing), changed: false };
+      const hasSource = existing.sourceRequirementCodes.includes(input.sourceRequirementCode);
+      if (existing.userManaged) {
+        if (hasSource) return { material: clone(existing), changed: false };
+        existing.sourceRequirementCodes = [...new Set([...existing.sourceRequirementCodes, input.sourceRequirementCode])];
+        existing.updatedAt = now();
+        return { material: clone(existing), changed: true };
+      }
+      if (existing.content === content && hasSource) return { material: clone(existing), changed: false };
       existing.content = content;
       existing.sourceRequirementCodes = [...new Set([...existing.sourceRequirementCodes, input.sourceRequirementCode])];
       existing.updatedAt = now();

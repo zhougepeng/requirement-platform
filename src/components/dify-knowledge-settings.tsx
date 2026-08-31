@@ -13,6 +13,7 @@ type DifySettings = {
   canSave: boolean;
   encryptionMessage?: string;
   sync: { totalDocuments: number; failedDocuments: number; lastError?: string };
+  extractionFailures: Array<{ requirementCode: string; failedAt: string; lastError: string }>;
   verification?: { datasetId: string; datasetName?: string };
   syncResult?: { total: number; synced: number; failed: Array<{ requirementCode: string; error: string }> };
 };
@@ -99,6 +100,18 @@ export function DifyKnowledgeSettings({ initialOpen = false, onClose }: { initia
     }
   }
 
+  async function retryExtraction(requirementCode: string) {
+    setError("");
+    setNotice("");
+    try {
+      const result = await request<DifySettings>("/api/v1/admin/dify", { method: "POST", body: JSON.stringify({ action: "retry-extraction", requirementCode }) });
+      setSettings(result);
+      setNotice(`${requirementCode} 的项目知识已重新提取。`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "项目知识提取重试失败。");
+    }
+  }
+
   return open ? <div className="model-manager-layer" role="presentation">
     <button className="model-manager-backdrop" aria-label="关闭 Dify 知识库设置" onClick={close} />
     <section className="model-manager-dialog dify-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="dify-settings-title">
@@ -120,6 +133,7 @@ export function DifyKnowledgeSettings({ initialOpen = false, onClose }: { initia
             <footer><button type="button" className="model-cancel" onClick={close}>关闭</button><button className="model-save" disabled={!settings?.canSave || saving}>{saving ? "保存并验证中…" : "保存并验证"}</button></footer>
           </form>
           <div className="dify-settings-sync"><div><b>知识库同步</b><small>{settings?.sync.lastError ? `最近错误：${settings.sync.lastError}` : "发布、版本恢复等变更会自动同步；可在此手动补齐。"}</small></div><button className="project-dialog-cancel" onClick={() => void syncAll()} disabled={!settings?.hasApiKey || syncing}>{syncing ? "同步中…" : "同步全部需求"}</button></div>
+          {settings?.extractionFailures.length ? <div className="dify-extraction-failures"><b>项目知识提取失败</b>{settings.extractionFailures.map((failure) => <div className="dify-extraction-failure" key={failure.requirementCode}><span><strong>{failure.requirementCode}</strong><small>{failure.lastError}</small></span><button className="project-dialog-cancel" onClick={() => void retryExtraction(failure.requirementCode)}>重试</button></div>)}</div> : null}
         </>}
       </div>
     </section>

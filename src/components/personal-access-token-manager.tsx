@@ -21,10 +21,9 @@ async function request<T>(url: string, init?: RequestInit) {
   return payload.data;
 }
 
-export function PersonalAccessTokenManager({ initialOpen = false, onClose }: { initialOpen?: boolean; onClose?: () => void }) {
+export function PersonalAccessTokenManager({ initialOpen = false, revealedToken = "", onRevealToken, onClose }: { initialOpen?: boolean; revealedToken?: string; onRevealToken?: (token: string) => void; onClose?: () => void }) {
   const [open, setOpen] = useState(initialOpen);
   const [tokens, setTokens] = useState<AccessToken[]>([]);
-  const [revealedToken, setRevealedToken] = useState("");
   const [loading, setLoading] = useState(initialOpen);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
@@ -52,9 +51,9 @@ export function PersonalAccessTokenManager({ initialOpen = false, onClose }: { i
         method: "POST",
         body: JSON.stringify({ label: "个人访问令牌" }),
       });
-      setRevealedToken(result.token);
+      onRevealToken?.(result.token);
       await load();
-      setNotice("新令牌已生成，旧令牌已立即失效。请现在复制并保存。" );
+      setNotice("新令牌已生成，旧令牌已立即失效。当前页面内可随时复制。" );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "无法生成个人访问令牌。" );
     } finally {
@@ -69,7 +68,7 @@ export function PersonalAccessTokenManager({ initialOpen = false, onClose }: { i
     setNotice("");
     try {
       const result = await request<{ revoked: number }>("/api/v1/auth/access-tokens", { method: "DELETE" });
-      setRevealedToken("");
+      onRevealToken?.("");
       await load();
       setNotice(result.revoked ? "个人访问令牌已停用。" : "当前没有可停用的个人访问令牌。" );
     } catch (reason) {
@@ -81,7 +80,28 @@ export function PersonalAccessTokenManager({ initialOpen = false, onClose }: { i
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(revealedToken);
+      if (!revealedToken) throw new Error("没有可复制的令牌。");
+      let copied = false;
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(revealedToken);
+          copied = true;
+        } catch {
+          copied = false;
+        }
+      }
+      if (!copied) {
+        const fallback = document.createElement("textarea");
+        fallback.value = revealedToken;
+        fallback.setAttribute("readonly", "");
+        fallback.style.position = "fixed";
+        fallback.style.opacity = "0";
+        document.body.append(fallback);
+        fallback.select();
+        copied = document.execCommand("copy");
+        fallback.remove();
+        if (!copied) throw new Error("复制失败。");
+      }
       setNotice("令牌已复制。请粘贴到需要对接的应用设置中。" );
     } catch {
       setError("无法自动复制，请手动复制令牌。" );
@@ -112,7 +132,7 @@ export function PersonalAccessTokenManager({ initialOpen = false, onClose }: { i
       <div className="model-manager-body">
         {error ? <p className="model-manager-error">{error}</p> : null}
         {notice ? <p className="personal-access-token-notice">{notice}</p> : null}
-        {revealedToken ? <section className="personal-access-token-secret"><strong>请立即复制令牌</strong><p>关闭此窗口后不会再显示完整内容；需要时请重新生成。</p><code>{revealedToken}</code><button className="model-save" onClick={() => void copy()}><Icon name="link" />复制令牌</button></section> : null}
+        {revealedToken ? <section className="personal-access-token-secret"><strong>请复制并妥善保存令牌</strong><p>本次页面会话内可重复复制；刷新、退出或关闭页面后不会再显示完整内容。</p><code>{revealedToken}</code><button className="model-save personal-access-token-copy" onClick={() => void copy()}><Icon name="link" />复制令牌</button></section> : null}
         {loading ? <p className="model-manager-empty">正在读取个人访问令牌…</p> : <section className="personal-access-token-status"><b>{activeToken ? "已配置个人访问令牌" : "尚未生成个人访问令牌"}</b>{activeToken ? <><span>{activeToken.tokenPrefix}…</span><small>创建于 {activeToken.createdAt}{activeToken.lastUsedAt ? `，最近使用 ${activeToken.lastUsedAt}` : "，尚未使用"}</small></> : <small>生成后配置到工作搭子或其他已接入应用。</small>}</section>}
       </div>
       <footer className="github-update-footer"><button className="model-cancel" onClick={close}>关闭</button>{activeToken ? <button className="model-cancel" disabled={saving} onClick={() => void revoke()}>停用令牌</button> : null}<button className="model-save" disabled={saving} onClick={() => void create()}>{saving ? "处理中…" : activeToken ? "重新生成" : "生成令牌"}</button></footer>
