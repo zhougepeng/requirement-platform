@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, Project, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementVersion } from "@/lib/types";
+import type { DemoArtifact, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -65,6 +65,18 @@ export type UpdateRequirementReleaseStatusInput = {
   scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
+};
+
+export type RequirementTimelineView = "month" | "version";
+export type RequirementTimelineGroup = {
+  key: string;
+  label: string;
+  items: RequirementTimelineEvent[];
+};
+export type RequirementTimelinePage = {
+  view: RequirementTimelineView;
+  groups: RequirementTimelineGroup[];
+  nextCursor?: string;
 };
 
 export function releaseStatusOf(requirement: Pick<import("@/lib/types").Requirement, "status">): RequirementReleaseStatus {
@@ -280,6 +292,20 @@ async function ensureStore(): Promise<RequirementStore> {
     store.testCases = [];
     migrated = true;
   }
+  if (!Array.isArray(store.timelineEvents)) {
+    store.timelineEvents = [];
+    migrated = true;
+  }
+  for (const requirement of store.requirements) {
+    const project = store.projects.find((item) => item.id === requirement.projectId);
+    if (!project) continue;
+    const status = releaseStatusOf(requirement);
+    if (status === "offline" || store.timelineEvents.some((event) => event.requirementCode === requirement.code && event.status === status)) continue;
+    const event = timelineEventFor(requirement, project, "backfill");
+    if (!event) continue;
+    store.timelineEvents.push(event);
+    migrated = true;
+  }
   if (migrated) await writeStore(store);
   return store;
 }
@@ -472,6 +498,46 @@ function validReleaseDate(value: string) {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
+function timelineEventFor(requirement: Requirement, project: Project, source: RequirementTimelineEvent["source"]): RequirementTimelineEvent | null {
+  const status = releaseStatusOf(requirement);
+  if (status === "online") {
+    if (!requirement.releaseVersion || !validReleaseDate(requirement.releaseDate ?? "")) return null;
+    return {
+      id: randomUUID(), requirementCode: requirement.code, projectId: project.id,
+      requirementName: requirement.title, projectName: project.name, status,
+      eventDate: requirement.releaseDate!, version: requirement.releaseVersion,
+      releaseDate: requirement.releaseDate, recordedAt: now(), source,
+    };
+  }
+  if (status === "scheduled") {
+    if (!requirement.scheduleVersion || !validReleaseDate(requirement.scheduledFullDate ?? "") || !validReleaseDate(requirement.scheduledGrayDate ?? "")) return null;
+    return {
+      id: randomUUID(), requirementCode: requirement.code, projectId: project.id,
+      requirementName: requirement.title, projectName: project.name, status,
+      eventDate: requirement.scheduledFullDate!, version: requirement.scheduleVersion,
+      scheduledGrayDate: requirement.scheduledGrayDate, scheduledFullDate: requirement.scheduledFullDate,
+      recordedAt: now(), source,
+    };
+  }
+  return null;
+}
+
+function upsertCurrentTimelineEvent(store: RequirementStore, requirement: Requirement, project: Project, previousStatus: RequirementReleaseStatus) {
+  const next = timelineEventFor(requirement, project, "status_update");
+  if (!next) return;
+  const events = store.timelineEvents ?? (store.timelineEvents = []);
+  const currentStatus = next.status;
+  const existing = previousStatus === currentStatus
+    ? events.filter((event) => event.requirementCode === requirement.code && event.status === currentStatus)
+      .toSorted((left, right) => right.recordedAt.localeCompare(left.recordedAt))[0]
+    : undefined;
+  if (existing) {
+    Object.assign(existing, { ...next, id: existing.id, source: existing.source });
+  } else {
+    events.push(next);
+  }
+}
+
 export async function updateRequirementReleaseStatus(requirementCode: string, input: UpdateRequirementReleaseStatusInput) {
   const status = input.status;
   if (status !== "offline" && status !== "scheduled" && status !== "online") throw new Error("需求状态无效。");
@@ -495,6 +561,7 @@ export async function updateRequirementReleaseStatus(requirementCode: string, in
     const project = store.projects.find((item) => item.id === requirement.projectId);
     if (!project) throw new Error("需求所属项目不存在。");
     if (archived(project) || archived(requirement)) throw new Error("已作废项目或需求不能修改上线状态。");
+    const previousStatus = releaseStatusOf(requirement);
     requirement.status = status;
     if (status === "online") {
       requirement.releaseVersion = releaseVersion;
@@ -517,8 +584,42 @@ export async function updateRequirementReleaseStatus(requirementCode: string, in
       summary.updatedAt = requirement.updatedAt;
     }
     project.updatedAt = requirement.updatedAt;
+    upsertCurrentTimelineEvent(store, requirement, project, previousStatus);
     return clone(requirement);
   });
+}
+
+function timelineItemOrder(left: RequirementTimelineEvent, right: RequirementTimelineEvent) {
+  return right.eventDate.localeCompare(left.eventDate)
+    || (left.status === "online" ? -1 : 1) - (right.status === "online" ? -1 : 1)
+    || right.recordedAt.localeCompare(left.recordedAt);
+}
+
+export async function listRequirementTimeline(view: RequirementTimelineView, cursor?: string): Promise<RequirementTimelinePage> {
+  const store = await ensureStore();
+  const events = (store.timelineEvents ?? [])
+    .filter((event) => {
+      const requirement = store.requirements.find((item) => item.code === event.requirementCode);
+      const project = store.projects.find((item) => item.id === event.projectId);
+      return Boolean(requirement && project && !archived(requirement) && !archived(project));
+    })
+    .toSorted(timelineItemOrder);
+  const grouped = new Map<string, RequirementTimelineGroup>();
+  for (const event of events) {
+    const key = view === "month" ? event.eventDate.slice(0, 7) : event.version;
+    const label = view === "month" ? `${Number(event.eventDate.slice(5, 7))}月` : event.version;
+    const group = grouped.get(key) ?? { key, label, items: [] };
+    group.items.push(event);
+    grouped.set(key, group);
+  }
+  const groups = Array.from(grouped.values()).map((group) => ({ ...group, items: group.items.toSorted(timelineItemOrder) }));
+  const orderedGroups = view === "month"
+    ? groups.toSorted((left, right) => right.key.localeCompare(left.key))
+    : groups.toSorted((left, right) => timelineItemOrder(left.items[0], right.items[0]));
+  const startAt = cursor ? Math.max(0, orderedGroups.findIndex((group) => group.key === cursor) + 1) : 0;
+  const pageSize = 3;
+  const page = orderedGroups.slice(startAt, startAt + pageSize);
+  return clone({ view, groups: page, nextCursor: startAt + pageSize < orderedGroups.length ? page.at(-1)?.key : undefined });
 }
 
 export async function listVersions(requirementCode: string) {

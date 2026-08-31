@@ -29,6 +29,7 @@ import type {
   RequirementDetail,
   RequirementDocument,
   RequirementSummary,
+  RequirementTimelineEvent,
   RequirementVersion,
 } from "@/lib/types";
 
@@ -50,6 +51,16 @@ type ProjectContextMenu = {
   x: number;
   y: number;
 } | null;
+type RequirementTimelineGroup = {
+  key: string;
+  label: string;
+  items: RequirementTimelineEvent[];
+};
+type RequirementTimelinePage = {
+  view: "month" | "version";
+  groups: RequirementTimelineGroup[];
+  nextCursor?: string;
+};
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -375,9 +386,11 @@ function ProjectDirectory({
 function RequirementBoard({
   projects,
   onOpenProject,
+  onOpenRequirement,
 }: {
   projects: Project[];
   onOpenProject: (project: Project) => void;
+  onOpenRequirement: (requirementCode: string) => void;
 }) {
   const overview = useMemo(() => {
     const requirements = projects.flatMap((project) => project.requirements);
@@ -520,7 +533,111 @@ function RequirementBoard({
         })}
       </div>
       <BoardOwnerTable rows={ownerRows} />
+      <RequirementTimeline onOpenRequirement={onOpenRequirement} />
     </div>
+  );
+}
+
+function RequirementTimeline({ onOpenRequirement }: { onOpenRequirement: (requirementCode: string) => void }) {
+  const [view, setView] = useState<"month" | "version">("month");
+  const [groups, setGroups] = useState<RequirementTimelineGroup[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    void request<RequirementTimelinePage>(`/api/v1/requirements/timeline?view=${view}`)
+      .then((page) => {
+        if (!active) return;
+        setGroups(page.groups);
+        setNextCursor(page.nextCursor);
+      })
+      .catch((reason) => {
+        if (active) setError(reason instanceof Error ? reason.message : "无法读取需求时间线。");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [view]);
+
+  const changeView = (nextView: "month" | "version") => {
+    if (nextView === view) return;
+    setLoading(true);
+    setError("");
+    setGroups([]);
+    setNextCursor(undefined);
+    setView(nextView);
+  };
+
+  const loadMore = useCallback(async () => {
+    if (loading || !nextCursor) return;
+    setLoading(true);
+    try {
+      const page = await request<RequirementTimelinePage>(`/api/v1/requirements/timeline?view=${view}&cursor=${encodeURIComponent(nextCursor)}`);
+      setGroups((current) => [...current, ...page.groups]);
+      setNextCursor(page.nextCursor);
+      setError("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法读取更多历史需求。");
+    } finally {
+      setLoading(false);
+    }
+  }, [loading, nextCursor, view]);
+
+  useEffect(() => {
+    const target = loadMoreRef.current;
+    if (!target || !nextCursor) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+    }, { rootMargin: "160px" });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [loadMore, nextCursor]);
+
+  return (
+    <section className="requirement-timeline">
+      <header>
+        <div><Icon name="file" /><b>需求详细时间线</b><small>按业务日期展示已上线与已排期需求</small></div>
+        <div className="timeline-view-switch" role="group" aria-label="时间线查看方式">
+          <button className={view === "month" ? "is-active" : ""} onClick={() => changeView("month")}>按月份查看</button>
+          <button className={view === "version" ? "is-active" : ""} onClick={() => changeView("version")}>按版本查看</button>
+        </div>
+      </header>
+      {groups.map((group) => {
+        const online = group.items.filter((item) => item.status === "online");
+        const scheduled = group.items.filter((item) => item.status === "scheduled");
+        return <article className="timeline-group" key={group.key}>
+          <aside>
+            <b>{group.label}</b>
+            {view === "month" ? <small>{group.key.slice(0, 4)}年</small> : <small>按时间倒序</small>}
+          </aside>
+          <div className="timeline-group-content">
+            {([online, scheduled] as const).map((items, index) => items.length ? <div className="timeline-status-group" key={index === 0 ? "online" : "scheduled"}>
+              <b className={index === 0 ? "is-online" : "is-scheduled"}>{index === 0 ? "已上线" : "已排期"}<small>{items.length}</small></b>
+              {items.map((item) => <button className="timeline-item" key={item.id} onClick={() => onOpenRequirement(item.requirementCode)}>
+                <time>{item.eventDate.slice(8, 10)}日</time>
+                <span>
+                  <strong>{item.requirementName}</strong>
+                  <small>{item.projectName}</small>
+                </span>
+                <span className="timeline-item-meta">
+                  <b>{index === 0 ? `上线版本 ${item.version}` : `排期版本 ${item.version}`}</b>
+                  <small>{index === 0 ? `上线时间 ${item.releaseDate ?? item.eventDate}` : `预计上线 ${item.scheduledFullDate ?? item.eventDate}`}</small>
+                </span>
+                <Icon name="chevron" />
+              </button>)}
+            </div> : null)}
+          </div>
+        </article>;
+      })}
+      {loading ? <p className="timeline-loading">正在加载…</p> : null}
+      {!loading && !groups.length && !error ? <p className="timeline-empty">暂无带明确排期或上线日期的需求记录。</p> : null}
+      {error ? <p className="timeline-error">{error}</p> : null}
+      <div ref={loadMoreRef} className="timeline-load-more">{!loading && nextCursor ? "向下滚动加载更早记录" : !loading && groups.length ? "已加载全部历史记录" : null}</div>
+    </section>
   );
 }
 
@@ -1645,6 +1762,7 @@ export function RequirementWorkspace({
               setActiveProjectId(project.id);
               setView("requirements");
             }}
+            onOpenRequirement={(requirementCode) => void loadRequirement(requirementCode)}
           />
         ) : view === "materials" ? (
           <MaterialLibrary projects={projects} canEdit={currentUser.canPublish} />

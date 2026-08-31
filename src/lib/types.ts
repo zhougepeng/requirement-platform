@@ -126,6 +126,23 @@ export type Requirement = {
   releaseDate?: string;
 };
 
+/** A persisted business event used by the requirement board timeline. */
+export type RequirementTimelineEvent = {
+  id: string;
+  requirementCode: string;
+  projectId: string;
+  requirementName: string;
+  projectName: string;
+  status: "scheduled" | "online";
+  eventDate: string;
+  version: string;
+  scheduledGrayDate?: string;
+  scheduledFullDate?: string;
+  releaseDate?: string;
+  recordedAt: string;
+  source: "backfill" | "status_update";
+};
+
 export type DemoArtifact = {
   id: string;
   originalFileName: string;
@@ -144,6 +161,8 @@ export type RequirementStore = {
   /** Optional for backward compatibility with existing local stores. */
   gaps?: RequirementGap[];
   testCases?: RequirementTestCase[];
+  /** Optional for backward compatibility with stores created before timeline support. */
+  timelineEvents?: RequirementTimelineEvent[];
 };
 
 export type RequirementDetail = {

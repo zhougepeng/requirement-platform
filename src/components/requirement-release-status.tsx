@@ -102,6 +102,7 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [editingStatus, setEditingStatus] = useState(false);
 
   async function loadNotificationSetup() {
     try {
@@ -113,11 +114,11 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
     } catch (reason) { setError(reason instanceof Error ? `通知对象读取失败：${reason.message}` : "通知对象读取失败。"); }
   }
 
-  function openStatusDialog(kind: "online" | "scheduled") {
-    setError(""); setNotice(""); setTargetWarning(""); setNotifyEnabled(true); setTargets([]); setTargetOptions([]);
+  function openStatusDialog(kind: "online" | "scheduled", correction = false) {
+    setError(""); setNotice(""); setTargetWarning(""); setEditingStatus(correction); setNotifyEnabled(!correction); setTargets([]); setTargetOptions([]);
     setReleaseVersion(requirement.releaseVersion ?? ""); setReleaseDate(requirement.releaseDate ?? today());
     setScheduleVersion(requirement.scheduleVersion ?? ""); setScheduledGrayDate(requirement.scheduledGrayDate ?? today()); setScheduledFullDate(requirement.scheduledFullDate ?? today());
-    setDialogKind(kind); void loadNotificationSetup();
+    setDialogKind(kind); if (!correction) void loadNotificationSetup();
   }
 
   async function selectStatus(next: RequirementStatusValue) {
@@ -125,6 +126,11 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
     if (next === "online" || next === "scheduled") { openStatusDialog(next); return; }
     setError(""); setNotice(""); setSaving(true);
     try { await onChange({ status: "offline" }); } catch (reason) { setError(reason instanceof Error ? reason.message : "保存需求状态失败。"); } finally { setSaving(false); }
+  }
+
+  function editCurrentStatus() {
+    if (!canEdit || saving || (status !== "online" && status !== "scheduled")) return;
+    openStatusDialog(status, true);
   }
 
   function valid(kind: "online" | "scheduled") {
@@ -151,11 +157,14 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
     if (!valid(dialogKind)) { setError(dialogKind === "online" ? "请填写上线版本和上线时间。" : "请填写排期版本、预计灰度时间和预计全量时间。"); return; }
     setSaving(true); setError("");
     try {
+      const correction = editingStatus;
       await onChange(payload(dialogKind));
-      void apiRequest(`/api/v1/projects/${encodeURIComponent(projectId)}/release-notification-preference`, { method: "PATCH", body: JSON.stringify({ enabled: notifyEnabled, targets }) }).catch(() => undefined);
+      if (!correction) void apiRequest(`/api/v1/projects/${encodeURIComponent(projectId)}/release-notification-preference`, { method: "PATCH", body: JSON.stringify({ enabled: notifyEnabled, targets }) }).catch(() => undefined);
       const kind = dialogKind;
       setDialogKind(null);
-      if (notifyEnabled && targets.length) { setNotificationKind(kind); void buildDraft(kind); }
+      setEditingStatus(false);
+      if (correction) setNotice(`${actionLabel(kind)}信息已更新。`);
+      else if (notifyEnabled && targets.length) { setNotificationKind(kind); void buildDraft(kind); }
       else if (notifyEnabled) setNotice(`${actionLabel(kind)}已保存，暂未发送通知：暂无可用通知对象。`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : `保存${actionLabel(dialogKind)}信息失败。`); } finally { setSaving(false); }
   }
@@ -175,5 +184,5 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
   const notificationDialog = notificationKind && typeof document !== "undefined" ? createPortal(<div className="release-status-dialog-layer" onClick={() => !sending && setNotificationKind(null)}><button className="release-status-dialog-backdrop" aria-label="关闭通知确认" /><div className="release-status-dialog release-notification-dialog release-notification-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="release-notification-dialog-title" onClick={(event) => event.stopPropagation()}><header><div><h2 id="release-notification-dialog-title">确认{actionLabel(notificationKind)}通知</h2><small>发送前可修改通知对象和内容</small></div><button type="button" className="release-status-close" onClick={() => setNotificationKind(null)} aria-label="关闭"><Icon name="close" /></button></header><div className="release-status-dialog-body"><label className="release-notification-label">通知对象<TargetPicker targets={targets} options={targetOptions} disabled={sending} onChange={setTargets} /></label>{targetWarning ? <p className="release-notification-help is-warning">{targetWarning}</p> : null}<label className="release-notification-label">通知内容<textarea value={draft} disabled={draftLoading || sending} onChange={(event) => setDraft(event.target.value)} placeholder={draftLoading ? `正在根据当前需求生成${actionLabel(notificationKind)}通知…` : "请输入通知内容"} /></label>{draftLoading ? <p className="release-notification-help">正在根据当前需求的 PRD、Demo 和测试用例生成初稿…</p> : null}{draftHint ? <p className="release-notification-help is-warning">{draftHint}</p> : null}{error ? <p className="release-status-error">{error}</p> : null}</div><footer><button type="button" className="release-status-cancel" disabled={sending} onClick={() => setNotificationKind(null)}>暂不发送</button><button type="button" className="release-status-confirm" disabled={sending || draftLoading} onClick={() => void sendNotification()}>{sending ? "发送中…" : error ? "重新发送" : "发送通知"}</button></footer></div></div>, document.body) : null;
 
   const meta = status === "online" ? [requirement.releaseVersion, requirement.releaseDate].filter(Boolean).join(" · ") : status === "scheduled" ? [requirement.scheduleVersion, requirement.scheduledGrayDate && `灰度 ${requirement.scheduledGrayDate}`, requirement.scheduledFullDate && `全量 ${requirement.scheduledFullDate}`].filter(Boolean).join(" · ") : "";
-  return <span className={`release-status ${compact ? "is-compact" : ""} is-${status}`} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>{canEdit ? <span className="release-status-control"><select className="release-status-select" value={status} disabled={saving} onChange={(event) => void selectStatus(event.target.value as RequirementStatusValue)} aria-label="需求状态"><option value="offline">未上线</option><option value="scheduled">已排期</option><option value="online">已上线</option></select><span className="release-status-chevron" aria-hidden="true">⌄</span></span> : <span className="release-status-readonly">{statusLabel(status)}</span>}{meta ? <small className="release-status-meta">{meta}</small> : null}{notice ? <span className="release-status-inline-success" role="status">{notice}</span> : null}{error && !dialogKind && !notificationKind ? <span className="release-status-inline-error" role="alert">{error}</span> : null}{statusDialog}{notificationDialog}</span>;
+  return <span className={`release-status ${compact ? "is-compact" : ""} is-${status}`} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>{canEdit ? <span className="release-status-control"><select className="release-status-select" value={status} disabled={saving} onChange={(event) => void selectStatus(event.target.value as RequirementStatusValue)} aria-label="需求状态"><option value="offline">未上线</option><option value="scheduled">已排期</option><option value="online">已上线</option></select><span className="release-status-chevron" aria-hidden="true">⌄</span></span> : <span className="release-status-readonly">{statusLabel(status)}</span>}{canEdit && !compact && (status === "online" || status === "scheduled") ? <button type="button" className="release-status-edit" onClick={editCurrentStatus} disabled={saving} title={`修改${statusLabel(status)}信息`} aria-label={`修改${statusLabel(status)}信息`}><Icon name="edit" /></button> : null}{meta ? <small className="release-status-meta">{meta}</small> : null}{notice ? <span className="release-status-inline-success" role="status">{notice}</span> : null}{error && !dialogKind && !notificationKind ? <span className="release-status-inline-error" role="alert">{error}</span> : null}{statusDialog}{notificationDialog}</span>;
 }
