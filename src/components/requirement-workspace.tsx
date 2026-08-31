@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useRouter } from "next/navigation";
 import { DemoFrame } from "@/components/demo-frame";
 import { ModelManager } from "@/components/model-manager";
 import { DifyKnowledgeSettings } from "@/components/dify-knowledge-settings";
@@ -904,6 +905,7 @@ export function RequirementWorkspace({
   startInDetail?: boolean;
   forceWaitingAuthorization?: boolean;
 }) {
+  const router = useRouter();
   const [view, setView] = useState<View>(startInDetail ? "detail" : "board");
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectRequirements, setProjectRequirements] = useState<
@@ -1134,6 +1136,14 @@ export function RequirementWorkspace({
       }
     },
     [selectVersion],
+  );
+
+  const openRequirement = useCallback(
+    (requirementCode: string, versionNumber?: number) => {
+      const query = versionNumber === undefined ? "" : `?v=${versionNumber}`;
+      router.push(`/r/${encodeURIComponent(requirementCode)}${query}`);
+    },
+    [router],
   );
 
   useEffect(() => {
@@ -1762,7 +1772,7 @@ export function RequirementWorkspace({
               setActiveProjectId(project.id);
               setView("requirements");
             }}
-            onOpenRequirement={(requirementCode) => void loadRequirement(requirementCode)}
+            onOpenRequirement={openRequirement}
           />
         ) : view === "materials" ? (
           <MaterialLibrary projects={projects} canEdit={currentUser.canPublish} />
@@ -1792,9 +1802,7 @@ export function RequirementWorkspace({
             onUpdateReleaseStatus={(requirement, input) =>
               updateReleaseStatus(requirement.code, input)
             }
-            onOpenRequirement={(requirement) =>
-              void loadRequirement(requirement.code)
-            }
+            onOpenRequirement={(requirement) => openRequirement(requirement.code)}
           />
         ) : (
           <>
@@ -1803,7 +1811,10 @@ export function RequirementWorkspace({
                 <div className="title-leading">
                   <button
                     className="breadcrumb"
-                    onClick={() => setView("requirements")}
+                    onClick={() => {
+                      if (startInDetail) router.push("/");
+                      else setView("requirements");
+                    }}
                     title={`返回 ${activeProject!.name}`}
                     aria-label={`返回 ${activeProject!.name}`}
                   >
@@ -1878,6 +1889,19 @@ export function RequirementWorkspace({
                   </button>
                 </div>
                 <div className="header-actions">
+                  <button
+                    className="icon-button"
+                    onClick={() =>
+                      void loadRequirement(
+                        detail!.requirement.code,
+                        selectedVersion!.number,
+                      )
+                    }
+                    title="刷新当前需求"
+                    aria-label="刷新当前需求"
+                  >
+                    <Icon name="refresh" />
+                  </button>
                   {currentUser.canPublish && !detail!.project.archivedAt ? (
                     <button
                       className={`icon-button detail-archive-button ${detail!.requirement.archivedAt ? "is-restore" : ""}`}
@@ -2125,9 +2149,7 @@ export function RequirementWorkspace({
                 }
               : { kind: "library" }
         }
-        onOpenRequirement={(requirementCode, versionNo) =>
-          void loadRequirement(requirementCode, versionNo)
-        }
+        onOpenRequirement={openRequirement}
       />
       <PublishPanel
         key={`${detail?.requirement.code ?? "new"}-${publishOpen ? "open" : "closed"}`}
