@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-import { addComment, getProject, getRequirementDetail, getVersion, listComments, listProjectRequirements, listProjects, listVersions, publishRequirement, searchRequirements } from "@/services/requirement/repository";
+import { getProject, getRequirementDetail, getVersion, listProjectRequirements, listProjects, listVersions, publishRequirement, searchRequirements } from "@/services/requirement/repository";
 import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 
 export const runtime = "nodejs";
@@ -30,7 +30,6 @@ function createServer() {
   server.registerTool("list_versions", { description: "列出需求业务版本", inputSchema: { requirement_code: z.string().min(2) } }, async ({ requirement_code }) => text(await listVersions(requirement_code)));
   server.registerTool("get_requirement_version", { description: "读取指定业务版本", inputSchema: { requirement_code: z.string().min(2), version: z.number().int().positive() } }, async ({ requirement_code, version }) => text(await getVersion(requirement_code, version)));
   server.registerTool("search_requirements", { description: "按当前版本的标题或 PRD 搜索需求", inputSchema: { query: z.string().min(1).max(200) } }, async ({ query }) => text(await searchRequirements(query)));
-  server.registerTool("add_comment", { description: "向指定需求版本添加评论", inputSchema: { requirement_code: z.string().min(2), version_id: z.string().min(1), content: z.string().min(1).max(2000) } }, async ({ requirement_code, version_id, content }) => text(await addComment(requirement_code, version_id, content, { id: "mcp-service", name: "Requirement MCP" })));
   server.registerTool("publish_requirement", { description: "使用已上传的 Demo 工件发布新需求版本，旧版本不会被覆盖", inputSchema: {
     project_code: z.string().min(2),
     requirement_code: z.string().min(2),
@@ -51,7 +50,6 @@ function createServer() {
     scheduleRequirementKnowledgeSync(published.requirement.code);
     return text(published);
   });
-  server.registerTool("list_comments", { description: "读取某版本的评论", inputSchema: { requirement_code: z.string().min(2), version_id: z.string().optional() } }, async ({ requirement_code, version_id }) => text(await listComments(requirement_code, version_id)));
   return server;
 }
 

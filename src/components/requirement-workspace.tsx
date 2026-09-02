@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
-import { DemoFrame } from "@/components/demo-frame";
+import { DemoCommentFrame } from "@/components/demo-comment-frame";
 import { ModelManager } from "@/components/model-manager";
 import { DifyKnowledgeSettings } from "@/components/dify-knowledge-settings";
 import { MaterialLibrary } from "@/components/material-library";
@@ -13,6 +13,8 @@ import { RequirementAssistant } from "@/components/requirement-assistant";
 import { PublishPanel } from "@/components/publish-panel";
 import { ProjectDialog } from "@/components/project-dialog";
 import { SnapshotPublishDialog } from "@/components/snapshot-publish-dialog";
+import { RequirementShareDialog } from "@/components/requirement-share-dialog";
+import { PrdCommentPanel } from "@/components/prd-comment-panel";
 import { VersionAssetsPanel } from "@/components/version-assets-panel";
 import { Icon } from "@/components/icons";
 import { RequirementMarkdown } from "@/components/requirement-markdown";
@@ -26,6 +28,8 @@ import {
 } from "@/components/requirement-release-status";
 import type {
   Project,
+  HtmlCommentAnchor,
+  PrdCommentAnchor,
   RequirementComment,
   RequirementDetail,
   RequirementDocument,
@@ -39,6 +43,7 @@ type View = "board" | "detail" | "projects" | "requirements" | "materials";
 type ApiResponse<T> =
   { data: T; error?: never } | { data?: never; error: string };
 type CurrentUser = {
+  openId?: string;
   name: string;
   initial: string;
   mode: "local" | "feishu";
@@ -66,6 +71,7 @@ type RequirementTimelinePage = {
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
+    cache: "no-store",
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   const body = (await response.json()) as ApiResponse<T>;
@@ -76,12 +82,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 async function fetchRequirementData(requirementCode: string) {
   const code = encodeURIComponent(requirementCode);
-  const [detail, versions, comments] = await Promise.all([
+  const [detail, versions] = await Promise.all([
     request<RequirementDetail>(`/api/v1/requirements/${code}`),
     request<RequirementVersion[]>(`/api/v1/requirements/${code}/versions`),
-    request<RequirementComment[]>(`/api/v1/requirements/${code}/comments`),
   ]);
-  return { detail, versions, comments };
+  return { detail, versions };
 }
 
 async function copyText(value: string) {
@@ -107,132 +112,6 @@ async function copyText(value: string) {
   const copied = document.execCommand("copy");
   fallback.remove();
   if (!copied) throw new Error("复制失败。");
-}
-
-function VersionDiscussion({
-  versionId,
-  versionNo,
-  label,
-  comments,
-  onAdd,
-}: {
-  versionId: string;
-  versionNo: number;
-  label: string;
-  comments: RequirementComment[];
-  onAdd: (content: string) => Promise<void>;
-}) {
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [open, setOpen] = useState(false);
-  const versionComments = comments.filter(
-    (comment) => comment.versionId === versionId,
-  );
-  async function submit() {
-    const value = text.trim();
-    if (!value || sending) return;
-    setSending(true);
-    try {
-      await onAdd(value);
-      setText("");
-    } finally {
-      setSending(false);
-    }
-  }
-  return (
-    <section className="discussion" aria-label="本版本留言">
-      <button
-        className="comment-tag"
-        onClick={() => setOpen((current) => !current)}
-        aria-expanded={open}
-        aria-controls="version-comments"
-      >
-        <Icon name="message" />
-        <span>{label}</span>
-        {versionComments.length ? <b>{versionComments.length}</b> : null}
-      </button>
-      {open ? (
-        <>
-          <button
-            className="comment-dismiss"
-            aria-label="关闭留言"
-            onClick={() => setOpen(false)}
-          />
-          <div
-            className="comment-popover"
-            id="version-comments"
-            role="dialog"
-            aria-label="本版本留言"
-          >
-            <div className="comment-popover-head">
-              <span>{label}</span>
-              <small>
-                {versionComments.length
-                  ? `${versionComments.length} 条`
-                  : "暂无评论"}
-              </small>
-              <button
-                className="comment-close"
-                onClick={() => setOpen(false)}
-                aria-label="关闭留言"
-              >
-                ×
-              </button>
-            </div>
-            <div className="comment-list">
-              {versionComments.length ? (
-                versionComments.map((comment) => (
-                  <article className="comment-card" key={comment.id}>
-                    <div className="comment-card-head">
-                      <span className="comment-card-source">
-                        当前版本 · V{versionNo}
-                      </span>
-                      <time>{comment.createdAt}</time>
-                    </div>
-                    <p>{comment.content}</p>
-                    <div className="comment-card-footer">
-                      <span className={`avatar avatar-${comment.tone}`}>
-                        {comment.initials}
-                      </span>
-                      <b>{comment.author}</b>
-                    </div>
-                  </article>
-                ))
-              ) : (
-                <p className="comment-empty">还没有评论。</p>
-              )}
-            </div>
-            <div className="comment-composer">
-              <span className="comment-composer-context">
-                当前版本 · V{versionNo}
-              </span>
-              <textarea
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void submit();
-                  }
-                }}
-                rows={2}
-                placeholder="写下评论，回车仅记录"
-                aria-label="发表评论"
-              />
-              <button
-                className="send-button"
-                onClick={() => void submit()}
-                disabled={!text.trim() || sending}
-                aria-label="发送评论"
-              >
-                <Icon name="send" />
-              </button>
-            </div>
-          </div>
-        </>
-      ) : null}
-    </section>
-  );
 }
 
 function ProjectDirectory({
@@ -918,7 +797,15 @@ export function RequirementWorkspace({
   const [selectedVersionId, setSelectedVersionId] = useState("");
   const [selectedPrdDocumentId, setSelectedPrdDocumentId] = useState("");
   const [selectedDemoDocumentId, setSelectedDemoDocumentId] = useState("");
-  const [comments, setComments] = useState<RequirementComment[]>([]);
+  const [prdComments, setPrdComments] = useState<RequirementComment[]>([]);
+  const [prdCommentPositions, setPrdCommentPositions] = useState<Record<string, number>>({});
+  const [prdCommentsOpen, setPrdCommentsOpen] = useState(false);
+  const [activePrdCommentId, setActivePrdCommentId] = useState<string | null>(null);
+  const [prdCommentMode, setPrdCommentMode] = useState(false);
+  const [htmlComments, setHtmlComments] = useState<RequirementComment[]>([]);
+  const [htmlCommentMode, setHtmlCommentMode] = useState(false);
+  const [documentRefreshKey, setDocumentRefreshKey] = useState(0);
+  const [refreshingRequirement, setRefreshingRequirement] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser>({
     name: "本地开发身份",
     initial: "用",
@@ -926,6 +813,7 @@ export function RequirementWorkspace({
   });
   const [tab, setTab] = useState<Tab>("demo");
   const [notice, setNotice] = useState("");
+  const [commentModeNotice, setCommentModeNotice] = useState(false);
   const [copyNotice, setCopyNotice] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -941,6 +829,8 @@ export function RequirementWorkspace({
   const [revealedPersonalAccessToken, setRevealedPersonalAccessToken] = useState("");
   const [publishOpen, setPublishOpen] = useState(false);
   const [snapshotPublishOpen, setSnapshotPublishOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareSession, setShareSession] = useState(0);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [projectDialogSession, setProjectDialogSession] = useState(0);
@@ -1000,6 +890,8 @@ export function RequirementWorkspace({
   const selectedPrdSource = selectedPrdDocument?.content ?? selectedVersion?.prd ?? "";
   const selectedPrdAssetBaseUrl = selectedPrdDocument?.url;
   const selectedDemoUrl = selectedDemoDocument?.url ?? selectedVersion?.demoEntryUrl ?? "";
+  const prdThreadCount = prdComments.filter((comment) => !comment.parentId).length;
+  const htmlThreadCount = htmlComments.filter((comment) => !comment.parentId).length;
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ??
     detail?.project ??
@@ -1048,6 +940,30 @@ export function RequirementWorkspace({
     );
     return () => window.clearTimeout(timer);
   }, [showArchivedKey]);
+
+  useEffect(() => {
+    const requirementCode = detail?.requirement.code;
+    const versionId = selectedVersion?.id;
+    const documentId = selectedPrdDocument?.id;
+    if (!requirementCode || !versionId || !documentId) return;
+    let active = true;
+    void request<RequirementComment[]>(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/comments?version_id=${encodeURIComponent(versionId)}&document_id=${encodeURIComponent(documentId)}`)
+      .then((comments) => { if (active) { setPrdComments(comments); setActivePrdCommentId(null); } })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法读取 PRD 评论。"); });
+    return () => { active = false; };
+  }, [detail?.requirement.code, selectedPrdDocument?.id, selectedVersion?.id]);
+
+  useEffect(() => {
+    const requirementCode = detail?.requirement.code;
+    const versionId = selectedVersion?.id;
+    const documentId = selectedDemoDocument?.id;
+    if (!requirementCode || !versionId || !documentId) return;
+    let active = true;
+    void request<RequirementComment[]>(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/comments?version_id=${encodeURIComponent(versionId)}&document_id=${encodeURIComponent(documentId)}&kind=html`)
+      .then((comments) => { if (active) setHtmlComments(comments); })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法读取 HTML 评论。"); });
+    return () => { active = false; };
+  }, [detail?.requirement.code, selectedDemoDocument?.id, selectedVersion?.id]);
 
   useEffect(() => {
     const openTestCases = () => setTab("test-cases");
@@ -1109,17 +1025,17 @@ export function RequirementWorkspace({
     window.setTimeout(() => setNotice(""), 3200);
   }, []);
 
+  const showCommentModeNotice = useCallback(() => {
+    setCommentModeNotice(true);
+    window.setTimeout(() => setCommentModeNotice(false), 2200);
+  }, []);
+
   const loadRequirement = useCallback(
     async (requirementCode: string, versionNumber?: number) => {
       try {
-        const {
-          detail: nextDetail,
-          versions: nextVersions,
-          comments: nextComments,
-        } = await fetchRequirementData(requirementCode);
+        const { detail: nextDetail, versions: nextVersions } = await fetchRequirementData(requirementCode);
         setDetail(nextDetail);
         setVersions(nextVersions);
-        setComments(nextComments);
         selectVersion(
           nextVersions.find((version) => version.number === versionNumber)
             ?.id ?? nextDetail.currentVersion.id,
@@ -1137,6 +1053,30 @@ export function RequirementWorkspace({
     },
     [selectVersion],
   );
+
+  const refreshCurrentRequirement = useCallback(async () => {
+    if (!detail || !selectedVersion || refreshingRequirement) return;
+    const versionNumber = selectedVersion.number;
+    const prdDocumentId = selectedPrdDocumentId;
+    const demoDocumentId = selectedDemoDocumentId;
+    setRefreshingRequirement(true);
+    try {
+      const { detail: nextDetail, versions: nextVersions } = await fetchRequirementData(detail.requirement.code);
+      const nextVersion = nextVersions.find((version) => version.number === versionNumber) ?? nextDetail.currentVersion;
+      setDetail(nextDetail);
+      setVersions(nextVersions);
+      setSelectedVersionId(nextVersion.id);
+      setSelectedPrdDocumentId(prdDocumentId);
+      setSelectedDemoDocumentId(demoDocumentId);
+      setDocumentRefreshKey((current) => current + 1);
+      setError("");
+      showNotice("已刷新当前版本的 Demo 和 PRD 内容");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "刷新当前需求失败。");
+    } finally {
+      setRefreshingRequirement(false);
+    }
+  }, [detail, refreshingRequirement, selectedDemoDocumentId, selectedPrdDocumentId, selectedVersion, showNotice]);
 
   const openRequirement = useCallback(
     (requirementCode: string, versionNumber?: number) => {
@@ -1161,7 +1101,6 @@ export function RequirementWorkspace({
           const result = await fetchRequirementData(initialRequirementCode);
           setDetail(result.detail);
           setVersions(result.versions);
-          setComments(result.comments);
           setActiveProjectId(result.detail.project.id);
           selectVersion(
             result.versions.find(
@@ -1181,18 +1120,6 @@ export function RequirementWorkspace({
       });
   }, [initialRequirementCode, initialVersionNumber, selectVersion, startInDetail]);
 
-  async function addComment(content: string) {
-    if (!detail || !selectedVersion) return;
-    const comment = await request<RequirementComment>(
-      `/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/comments`,
-      {
-        method: "POST",
-        body: JSON.stringify({ version_id: selectedVersion.id, content }),
-      },
-    );
-    setComments((current) => [...current, comment]);
-  }
-
   async function copyLink() {
     if (!detail || !selectedVersion) return;
     const url = `${window.location.origin}/r/${detail.requirement.code}${selectedVersion.id === detail.currentVersion.id ? "" : `?v=${selectedVersion.number}`}`;
@@ -1203,6 +1130,46 @@ export function RequirementWorkspace({
     } catch {
       setError("无法自动复制链接，请手动复制浏览器地址。");
     }
+  }
+
+  async function createPrdComment(content: string, anchor: PrdCommentAnchor) {
+    if (!detail || !selectedVersion || !selectedPrdDocument) throw new Error("当前 PRD 不可用。");
+    const comment = await request<RequirementComment>(`/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/comments`, { method: "POST", body: JSON.stringify({ version_id: selectedVersion.id, document_id: selectedPrdDocument.id, content, anchor }) });
+    setPrdComments((current) => [...current, comment]);
+    return comment;
+  }
+
+  async function replyPrdComment(threadId: string, content: string) {
+    if (!detail || !selectedVersion || !selectedPrdDocument) throw new Error("当前 PRD 不可用。");
+    const comment = await request<RequirementComment>(`/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/comments`, { method: "POST", body: JSON.stringify({ version_id: selectedVersion.id, document_id: selectedPrdDocument.id, parent_id: threadId, content }) });
+    setPrdComments((current) => [...current, comment]);
+    return comment;
+  }
+
+  async function createHtmlComment(content: string, anchor: HtmlCommentAnchor) {
+    if (!detail || !selectedVersion || !selectedDemoDocument) throw new Error("当前 HTML Demo 不可用。");
+    const comment = await request<RequirementComment>(`/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/comments`, { method: "POST", body: JSON.stringify({ version_id: selectedVersion.id, document_id: selectedDemoDocument.id, kind: "html", content, anchor: { ...anchor, documentId: selectedDemoDocument.id, documentPath: selectedDemoDocument.path } }) });
+    setHtmlComments((current) => [...current, comment]);
+    return comment;
+  }
+
+  async function replyHtmlComment(threadId: string, content: string) {
+    if (!detail || !selectedVersion || !selectedDemoDocument) throw new Error("当前 HTML Demo 不可用。");
+    const comment = await request<RequirementComment>(`/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/comments`, { method: "POST", body: JSON.stringify({ version_id: selectedVersion.id, document_id: selectedDemoDocument.id, kind: "html", parent_id: threadId, content }) });
+    setHtmlComments((current) => [...current, comment]);
+    return comment;
+  }
+
+  async function updateRequirementComment(comment: RequirementComment, content: string) {
+    const updated = await request<RequirementComment>(`/api/v1/requirements/${encodeURIComponent(comment.requirementCode)}/comments/${encodeURIComponent(comment.id)}`, { method: "PATCH", body: JSON.stringify({ content }) });
+    if (updated.kind === "html") setHtmlComments((current) => current.map((item) => item.id === updated.id ? updated : item));
+    else setPrdComments((current) => current.map((item) => item.id === updated.id ? updated : item));
+  }
+
+  async function deleteRequirementComment(comment: RequirementComment) {
+    const updated = await request<RequirementComment>(`/api/v1/requirements/${encodeURIComponent(comment.requirementCode)}/comments/${encodeURIComponent(comment.id)}`, { method: "DELETE" });
+    if (updated.kind === "html") setHtmlComments((current) => current.map((item) => item.id === updated.id ? updated : item));
+    else setPrdComments((current) => current.map((item) => item.id === updated.id ? updated : item));
   }
 
   async function handlePublished(result: {
@@ -1763,7 +1730,7 @@ export function RequirementWorkspace({
         </aside>
       ) : null}
       <main
-        className={`main-panel ${view === "detail" && tab === "demo" ? "is-demo-view" : ""} ${view === "materials" ? "is-materials-view" : ""}`}
+        className={`main-panel ${view === "detail" && tab === "demo" ? "is-demo-view" : ""} ${view === "materials" ? "is-materials-view" : ""} ${prdCommentsOpen && (tab === "prd" || tab === "split") ? "has-prd-comments-panel" : ""}`}
       >
         {view === "board" ? (
           <RequirementBoard
@@ -1889,19 +1856,30 @@ export function RequirementWorkspace({
                   </button>
                 </div>
                 <div className="header-actions">
+                  {tab === "demo" ? <button className={`icon-button${htmlCommentMode ? " is-active" : ""}`} onClick={() => { const next = !htmlCommentMode; setHtmlCommentMode(next); if (next) showCommentModeNotice(); }} title={`Demo 评论${htmlThreadCount ? `（${htmlThreadCount}）` : ""}`} aria-label="进入 Demo 评论态"><Icon name="message" />{htmlThreadCount ? <b className="prd-comment-count">{htmlThreadCount}</b> : null}</button> : null}
+                  {tab === "prd" || tab === "split" ? <button className={`icon-button${prdCommentMode ? " is-active" : ""}`} onClick={() => { const next = !prdCommentMode; setPrdCommentMode(next); if (next) showCommentModeNotice(); }} title={`PRD 评论${prdThreadCount ? `（${prdThreadCount}）` : ""}`} aria-label="进入 PRD 评论态"><Icon name="message" />{prdThreadCount ? <b className="prd-comment-count">{prdThreadCount}</b> : null}</button> : null}
                   <button
-                    className="icon-button"
-                    onClick={() =>
-                      void loadRequirement(
-                        detail!.requirement.code,
-                        selectedVersion!.number,
-                      )
-                    }
-                    title="刷新当前需求"
-                    aria-label="刷新当前需求"
+                    className={`icon-button${refreshingRequirement ? " is-refreshing" : ""}`}
+                    onClick={() => void refreshCurrentRequirement()}
+                    disabled={refreshingRequirement}
+                    title={refreshingRequirement ? "正在刷新当前需求" : "刷新当前需求"}
+                    aria-label={refreshingRequirement ? "正在刷新当前需求" : "刷新当前需求"}
                   >
                     <Icon name="refresh" />
                   </button>
+                  {currentUser.canPublish ? (
+                    <button
+                      className="icon-button"
+                      onClick={() => {
+                        setShareSession((current) => current + 1);
+                        setShareOpen(true);
+                      }}
+                      title="分享需求"
+                      aria-label="分享需求"
+                    >
+                      <Icon name="send" />
+                    </button>
+                  ) : null}
                   {currentUser.canPublish && !detail!.project.archivedAt ? (
                     <button
                       className={`icon-button detail-archive-button ${detail!.requirement.archivedAt ? "is-restore" : ""}`}
@@ -1928,11 +1906,12 @@ export function RequirementWorkspace({
                   !detail!.requirement.archivedAt &&
                   !detail!.project.archivedAt ? (
                     <button
-                      className="publish-button publish-update-button"
+                      className="icon-button publish-update-button"
                       onClick={() => setSnapshotPublishOpen(true)}
+                      title="发布新版本"
+                      aria-label="发布新版本"
                     >
                       <Icon name="plus" />
-                      发布新版本
                     </button>
                   ) : null}
                   <label className="version-select">
@@ -1959,18 +1938,19 @@ export function RequirementWorkspace({
               </div>
             </header>
             {notice && (
-              <div className="notice">
+              <div className="workspace-toast" role="status">
                 <Icon name="check" />
                 {notice}
               </div>
             )}
+            {commentModeNotice ? <div className="comment-mode-toast" role="status"><Icon name="check" />已进入评论态</div> : null}
             {copyNotice ? (
               <div className="copy-toast" role="status" aria-live="polite">
                 <Icon name="check" />
                 {copyNotice}
               </div>
             ) : null}
-            {error && <div className="notice error-notice">{error}</div>}
+            {error && <div className="workspace-toast is-error" role="alert">{error}</div>}
             {tab === "versions" ? (
               <VersionAssetsPanel
                 requirementCode={detail!.requirement.code}
@@ -2003,11 +1983,11 @@ export function RequirementWorkspace({
                         label="Demo 文件"
                       />
                       <div className="document-browser-content">
-                        <DemoFrame viewport="desktop" src={selectedDemoUrl} />
+                        <DemoCommentFrame viewport="desktop" src={selectedDemoUrl} refreshKey={documentRefreshKey} commentMode={htmlCommentMode} comments={htmlComments} actor={{ id: currentUser.openId, name: currentUser.name, initial: currentUser.initial }} onCommentModeChange={setHtmlCommentMode} onCreateComment={createHtmlComment} onReply={replyHtmlComment} onUpdate={updateRequirementComment} onDelete={deleteRequirementComment} />
                       </div>
                     </div>
                   ) : (
-                    <DemoFrame viewport="desktop" src={selectedDemoUrl} />
+                    <DemoCommentFrame viewport="desktop" src={selectedDemoUrl} refreshKey={documentRefreshKey} commentMode={htmlCommentMode} comments={htmlComments} actor={{ id: currentUser.openId, name: currentUser.name, initial: currentUser.initial }} onCommentModeChange={setHtmlCommentMode} onCreateComment={createHtmlComment} onReply={replyHtmlComment} onUpdate={updateRequirementComment} onDelete={deleteRequirementComment} />
                   )}
                 </div>
                 <div
@@ -2036,6 +2016,14 @@ export function RequirementWorkspace({
                       source={selectedPrdSource}
                       demoEntryUrl={selectedDemoUrl}
                       assetBaseUrl={selectedPrdAssetBaseUrl}
+                      documentId={selectedPrdDocument?.id}
+                      documentPath={selectedPrdDocument?.path}
+                      comments={prdComments}
+                      commenterInitial={currentUser.initial}
+                      commentMode={prdCommentMode}
+                      onCreateComment={createPrdComment}
+                      onCommentPositions={setPrdCommentPositions}
+                      onOpenComment={() => { setActivePrdCommentId(null); setPrdCommentsOpen(true); }}
                     />
                   </div>
                 ) : (
@@ -2044,12 +2032,20 @@ export function RequirementWorkspace({
                     source={selectedPrdSource}
                     demoEntryUrl={selectedDemoUrl}
                     assetBaseUrl={selectedPrdAssetBaseUrl}
+                    documentId={selectedPrdDocument?.id}
+                    documentPath={selectedPrdDocument?.path}
+                    comments={prdComments}
+                    commenterInitial={currentUser.initial}
+                    commentMode={prdCommentMode}
+                    onCreateComment={createPrdComment}
+                    onCommentPositions={setPrdCommentPositions}
+                    onOpenComment={() => { setActivePrdCommentId(null); setPrdCommentsOpen(true); }}
                   />
                 )}
               </section>
             ) : (
               <section
-                className={`content-surface ${tab === "demo" ? "is-demo" : ""}`}
+                className={`content-surface ${tab === "demo" ? "is-demo" : ""} ${tab === "prd" && prdDocuments.length > 1 ? "has-document-directory" : ""}`}
               >
                 {tab === "demo" ? (
                   demoDocuments.length > 1 ? (
@@ -2061,11 +2057,11 @@ export function RequirementWorkspace({
                         label="Demo 文件"
                       />
                       <div className="document-browser-content">
-                        <DemoFrame viewport="desktop" src={selectedDemoUrl} />
+                        <DemoCommentFrame viewport="desktop" src={selectedDemoUrl} refreshKey={documentRefreshKey} commentMode={htmlCommentMode} comments={htmlComments} actor={{ id: currentUser.openId, name: currentUser.name, initial: currentUser.initial }} onCommentModeChange={setHtmlCommentMode} onCreateComment={createHtmlComment} onReply={replyHtmlComment} onUpdate={updateRequirementComment} onDelete={deleteRequirementComment} />
                       </div>
                     </div>
                   ) : (
-                    <DemoFrame viewport="desktop" src={selectedDemoUrl} />
+                    <DemoCommentFrame viewport="desktop" src={selectedDemoUrl} refreshKey={documentRefreshKey} commentMode={htmlCommentMode} comments={htmlComments} actor={{ id: currentUser.openId, name: currentUser.name, initial: currentUser.initial }} onCommentModeChange={setHtmlCommentMode} onCreateComment={createHtmlComment} onReply={replyHtmlComment} onUpdate={updateRequirementComment} onDelete={deleteRequirementComment} />
                   )
                 ) : (
                   prdDocuments.length > 1 ? (
@@ -2080,6 +2076,14 @@ export function RequirementWorkspace({
                         source={selectedPrdSource}
                         demoEntryUrl={selectedDemoUrl}
                         assetBaseUrl={selectedPrdAssetBaseUrl}
+                        documentId={selectedPrdDocument?.id}
+                        documentPath={selectedPrdDocument?.path}
+                        comments={prdComments}
+                        commenterInitial={currentUser.initial}
+                        commentMode={prdCommentMode}
+                        onCreateComment={createPrdComment}
+                        onCommentPositions={setPrdCommentPositions}
+                        onOpenComment={() => { setActivePrdCommentId(null); setPrdCommentsOpen(true); }}
                       />
                     </div>
                   ) : (
@@ -2087,6 +2091,14 @@ export function RequirementWorkspace({
                       source={selectedPrdSource}
                       demoEntryUrl={selectedDemoUrl}
                       assetBaseUrl={selectedPrdAssetBaseUrl}
+                      documentId={selectedPrdDocument?.id}
+                      documentPath={selectedPrdDocument?.path}
+                      comments={prdComments}
+                      commenterInitial={currentUser.initial}
+                      commentMode={prdCommentMode}
+                      onCreateComment={createPrdComment}
+                      onCommentPositions={setPrdCommentPositions}
+                      onOpenComment={() => { setActivePrdCommentId(null); setPrdCommentsOpen(true); }}
                     />
                   )
                 )}
@@ -2113,15 +2125,19 @@ export function RequirementWorkspace({
                 />
               </>
             ) : null}
-            {tab !== "versions" && tab !== "test-cases" ? (
-              <VersionDiscussion
-                versionId={selectedVersion!.id}
-                versionNo={selectedVersion!.number}
-                label={tab === "prd" ? "PRD 评论" : "版本留言"}
-                comments={comments}
-                onAdd={addComment}
-              />
-            ) : null}
+            {(tab === "prd" || tab === "split") ? <PrdCommentPanel
+              open={prdCommentsOpen}
+              comments={prdComments}
+              positions={prdCommentPositions}
+              activeThreadId={activePrdCommentId}
+              actor={{ id: currentUser.openId, name: currentUser.name }}
+              versionLabel={`V${selectedVersion!.number}`}
+              onClose={() => { setPrdCommentsOpen(false); setActivePrdCommentId(null); }}
+              onSelectThread={setActivePrdCommentId}
+              onReply={replyPrdComment}
+                        onUpdate={updateRequirementComment}
+                        onDelete={deleteRequirementComment}
+            /> : null}
           </>
         )}
       </main>
@@ -2168,6 +2184,14 @@ export function RequirementWorkspace({
         onPublished={() => {
           if (detail) void loadRequirement(detail.requirement.code);
         }}
+      />
+      <RequirementShareDialog
+        key={shareSession}
+        open={shareOpen}
+        requirementCode={detail?.requirement.code ?? ""}
+        requirementTitle={detail?.requirement.title ?? ""}
+        onClose={() => setShareOpen(false)}
+        onSent={showNotice}
       />
       <ProjectDialog
         key={`${editingProject?.id ?? "new"}-${projectDialogSession}`}

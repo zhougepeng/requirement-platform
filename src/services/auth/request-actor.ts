@@ -21,7 +21,8 @@ async function personalAccessTokenActor(request: Request): Promise<RequirementAc
   if (!supplied) return undefined;
   const credential = await resolvePersonalAccessToken(supplied);
   if (!credential) throw new Error("个人访问令牌无效或已撤销，请在需求平台重新生成并配置。" );
-  const employee = await requirePublisherEmployee(credential.openId);
+  // 评论与查看共用访问门槛：持有个人令牌的查看者也可以参与评论。
+  const employee = await requireViewerEmployee(credential.openId);
   return { id: employee.openId, name: employee.name, authSource: "personal_access_token" };
 }
 

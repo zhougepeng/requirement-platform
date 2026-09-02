@@ -29,14 +29,46 @@ export type RequirementDocument = {
 export type RequirementAssetFile = { path: string; size: number; hash: string; mimeType: string };
 export type RequirementAssetManifest = { files: RequirementAssetFile[]; totalFiles: number; totalSize: number; createdAt: string };
 
+export type PrdCommentAnchor = {
+  documentId: string;
+  documentPath: string;
+  quote: string;
+  prefix: string;
+  suffix: string;
+  start: number;
+  end: number;
+  blockIndex: number;
+};
+
+export type HtmlCommentAnchor = {
+  documentId: string;
+  documentPath: string;
+  selector: string;
+  quote: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type RequirementComment = {
   id: string;
   requirementCode: string;
   versionId: string;
+  kind?: "prd" | "html";
+  commentSchema?: "prd_thread_v2" | "html_thread_v1";
+  documentId?: string;
+  documentPath?: string;
+  anchor?: PrdCommentAnchor | HtmlCommentAnchor;
+  parentId?: string;
+  authorId?: string;
   author: string;
   initials: string;
   tone: "blue" | "green" | "violet";
   createdAt: string;
+  updatedAt?: string;
+  deletedAt?: string;
+  deletedBy?: string;
   content: string;
 };
 

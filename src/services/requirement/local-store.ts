@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion } from "@/lib/types";
+import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -118,6 +118,19 @@ function safeAssetPath(value: string) {
   return normalized;
 }
 
+function snapshotEntryPath(entry: { entryName: string; rawEntryName?: Buffer }) {
+  const rawName = entry.rawEntryName;
+  if (!rawName?.length) return entry.entryName;
+  const utf8Name = rawName.toString("utf8");
+  if (!utf8Name.includes("\uFFFD")) return utf8Name;
+  try {
+    // Windows 压缩工具常用 GBK/GB18030 写入中文文件名；UTF-8 解码失败时再回退，避免影响正常 UTF-8 包。
+    return new TextDecoder("gb18030", { fatal: true }).decode(rawName);
+  } catch {
+    return entry.entryName;
+  }
+}
+
 function mimeType(filePath: string) {
   const extension = path.posix.extname(filePath).toLowerCase();
   return ({ ".md": "text/markdown", ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml", ".woff": "font/woff", ".woff2": "font/woff2" }[extension] ?? "application/octet-stream");
@@ -174,7 +187,10 @@ async function parseSnapshotArchive(file: File) {
   if (!file.name.toLowerCase().endsWith(".zip")) throw new Error("需求资产必须上传 ZIP 文件。");
   if (file.size <= 0 || file.size > MAX_SNAPSHOT_BYTES) throw new Error("需求资产 ZIP 必须大于 0 且不超过 50MB。");
   const archive = new AdmZip(Buffer.from(await file.arrayBuffer()));
-  const entries = archive.getEntries().filter((entry) => !entry.isDirectory).map((entry) => ({ path: safeAssetPath(entry.entryName), data: entry.getData() }));
+  const entries = archive
+    .getEntries()
+    .filter((entry) => !entry.isDirectory)
+    .map((entry) => ({ path: safeAssetPath(snapshotEntryPath(entry)), data: entry.getData() }));
   const prdEntries = entries.filter((entry) => /(?:^|\/)prd\.(?:md|markdown)$/i.test(entry.path) || /^prd\/.+\.(?:md|markdown)$/i.test(entry.path) || /^PRD\.md$/i.test(entry.path));
   if (!prdEntries.length) throw new Error("需求资产 ZIP 必须包含 PRD.md 或 prd/ 下的 Markdown 文件。");
   if (!entries.some((entry) => entry.path.startsWith("demo/") && /\.html?$/i.test(entry.path))) throw new Error("需求资产 ZIP 必须包含 demo/ 下的 HTML 文件。");
@@ -634,9 +650,18 @@ export async function getVersion(requirementCode: string, versionNo: number) {
   return clone(version);
 }
 
-export async function listComments(requirementCode: string, versionId?: string) {
+export async function listPrdComments(requirementCode: string, versionId: string, documentId: string) {
   const store = await ensureStore();
-  return clone(store.comments.filter((item) => item.requirementCode === requirementCode && (!versionId || item.versionId === versionId)));
+  return clone(store.comments
+    .filter((item) => item.requirementCode === requirementCode && item.versionId === versionId && item.kind === "prd" && item.commentSchema === "prd_thread_v2" && item.documentId === documentId)
+    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)));
+}
+
+export async function listHtmlComments(requirementCode: string, versionId: string, documentId: string) {
+  const store = await ensureStore();
+  return clone(store.comments
+    .filter((item) => item.requirementCode === requirementCode && item.versionId === versionId && item.kind === "html" && item.commentSchema === "html_thread_v1" && item.documentId === documentId)
+    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)));
 }
 
 export async function searchRequirements(query: string) {
@@ -962,23 +987,144 @@ export async function findRequirementKnowledge(query: string, limit = 4): Promis
   return (await findScopedRequirementKnowledge({ query, scope: "all-published", limit })).matches;
 }
 
-export async function addComment(requirementCode: string, versionId: string, content: string, actor?: { id: string; name: string }) {
+function prdCommentAnchor(value: PrdCommentAnchor) {
+  const quote = value.quote.trim();
+  const prefix = value.prefix.trim();
+  const suffix = value.suffix.trim();
+  if (!value.documentId || !value.documentPath || !quote || quote.length > 1200) throw new Error("PRD 评论必须关联一段有效原文。");
+  if (!Number.isInteger(value.start) || !Number.isInteger(value.end) || value.start < 0 || value.end < value.start || !Number.isInteger(value.blockIndex) || value.blockIndex < 0) throw new Error("PRD 评论定位信息无效。");
+  if (prefix.length > 160 || suffix.length > 160) throw new Error("PRD 评论上下文过长。");
+  return { ...value, quote, prefix, suffix };
+}
+
+function htmlCommentAnchor(value: HtmlCommentAnchor) {
+  const quote = value.quote.trim();
+  const selector = value.selector.trim();
+  if (!value.documentId || !value.documentPath || !selector || !quote || quote.length > 500) throw new Error("HTML 评论必须关联一个有效页面区域。");
+  if (![value.x, value.y, value.width, value.height].every((item) => Number.isFinite(item)) || value.width <= 0 || value.height <= 0) throw new Error("HTML 评论定位信息无效。");
+  return { ...value, quote, selector, x: Math.max(0, value.x), y: Math.max(0, value.y), width: value.width, height: value.height };
+}
+
+function isPrdDocument(version: RequirementVersion, documentId: string) {
+  return documentId === `${version.id}:legacy-prd` || Boolean(version.documents?.some((document) => document.id === documentId && document.kind === "prd"));
+}
+
+function isDemoDocument(version: RequirementVersion, documentId: string) {
+  return documentId === `${version.id}:legacy-demo` || Boolean(version.documents?.some((document) => document.id === documentId && document.kind === "demo"));
+}
+
+function commentTone(actorId: string) {
+  return (["blue", "green", "violet"] as const)[Math.abs([...actorId].reduce((total, letter) => total + letter.charCodeAt(0), 0)) % 3];
+}
+
+function sameActor(comment: RequirementComment, actor?: { id: string; name: string }) {
+  const actorId = actor?.id || "local-dev-user";
+  return comment.authorId ? comment.authorId === actorId : comment.author === (actor?.name || "本地开发身份");
+}
+
+export async function addPrdComment(requirementCode: string, versionId: string, content: string, anchor: PrdCommentAnchor, actor?: { id: string; name: string }) {
   const value = content.trim();
   if (!value || value.length > 2000) throw new Error("评论内容不能为空且不能超过 2000 字。");
   return mutate((store) => {
     const version = store.versions.find((item) => item.id === versionId && item.requirementCode === requirementCode);
     if (!version) throw new Error("评论必须关联已有需求版本。");
+    if (!isPrdDocument(version, anchor.documentId)) throw new Error("PRD 文档不存在或不属于当前版本。");
+    const validatedAnchor = prdCommentAnchor(anchor);
+    const actorId = actor?.id || "local-dev-user";
     const comment: RequirementComment = {
       id: randomUUID(),
       requirementCode,
       versionId,
-      author: actor?.name || "张三（本地开发身份）",
-      initials: (actor?.name || "张").slice(0, 1),
-      tone: "blue",
+      kind: "prd",
+      commentSchema: "prd_thread_v2",
+      documentId: validatedAnchor.documentId,
+      documentPath: validatedAnchor.documentPath,
+      anchor: validatedAnchor,
+      authorId: actorId,
+      author: actor?.name || "本地开发身份",
+      initials: (actor?.name || "本").slice(0, 1),
+      tone: commentTone(actorId),
       createdAt: now(),
       content: value,
     };
     store.comments.push(comment);
+    return clone(comment);
+  });
+}
+
+export async function addHtmlComment(requirementCode: string, versionId: string, content: string, anchor: HtmlCommentAnchor, actor?: { id: string; name: string }) {
+  const value = content.trim();
+  if (!value || value.length > 2000) throw new Error("评论内容不能为空且不能超过 2000 字。");
+  return mutate((store) => {
+    const version = store.versions.find((item) => item.id === versionId && item.requirementCode === requirementCode);
+    if (!version) throw new Error("评论必须关联已有需求版本。");
+    if (!isDemoDocument(version, anchor.documentId)) throw new Error("HTML 文档不存在或不属于当前版本。");
+    const validatedAnchor = htmlCommentAnchor(anchor);
+    const actorId = actor?.id || "local-dev-user";
+    const comment: RequirementComment = {
+      id: randomUUID(), requirementCode, versionId, kind: "html", commentSchema: "html_thread_v1", documentId: validatedAnchor.documentId, documentPath: validatedAnchor.documentPath, anchor: validatedAnchor,
+      authorId: actorId, author: actor?.name || "本地开发身份", initials: (actor?.name || "本").slice(0, 1), tone: commentTone(actorId), createdAt: now(), content: value,
+    };
+    store.comments.push(comment);
+    return clone(comment);
+  });
+}
+
+export async function replyPrdComment(requirementCode: string, versionId: string, documentId: string, parentId: string, content: string, actor?: { id: string; name: string }) {
+  const value = content.trim();
+  if (!value || value.length > 2000) throw new Error("回复内容不能为空且不能超过 2000 字。");
+  return mutate((store) => {
+    const parent = store.comments.find((item) => item.id === parentId && !item.parentId);
+    if (!parent || parent.kind !== "prd" || parent.commentSchema !== "prd_thread_v2" || parent.requirementCode !== requirementCode || parent.versionId !== versionId || parent.documentId !== documentId) throw new Error("回复目标不存在或不属于当前 PRD。");
+    const actorId = actor?.id || "local-dev-user";
+    const reply: RequirementComment = {
+      id: randomUUID(), requirementCode, versionId, kind: "prd", commentSchema: "prd_thread_v2", documentId, documentPath: parent.documentPath,
+      parentId, authorId: actorId, author: actor?.name || "本地开发身份", initials: (actor?.name || "本").slice(0, 1), tone: commentTone(actorId), createdAt: now(), content: value,
+    };
+    store.comments.push(reply);
+    return clone(reply);
+  });
+}
+
+export async function replyHtmlComment(requirementCode: string, versionId: string, documentId: string, parentId: string, content: string, actor?: { id: string; name: string }) {
+  const value = content.trim();
+  if (!value || value.length > 2000) throw new Error("回复内容不能为空且不能超过 2000 字。");
+  return mutate((store) => {
+    const parent = store.comments.find((item) => item.id === parentId && !item.parentId);
+    if (!parent || parent.kind !== "html" || parent.commentSchema !== "html_thread_v1" || parent.requirementCode !== requirementCode || parent.versionId !== versionId || parent.documentId !== documentId) throw new Error("回复目标不存在或不属于当前 HTML。");
+    const actorId = actor?.id || "local-dev-user";
+    const reply: RequirementComment = {
+      id: randomUUID(), requirementCode, versionId, kind: "html", commentSchema: "html_thread_v1", documentId, documentPath: parent.documentPath,
+      parentId, authorId: actorId, author: actor?.name || "本地开发身份", initials: (actor?.name || "本").slice(0, 1), tone: commentTone(actorId), createdAt: now(), content: value,
+    };
+    store.comments.push(reply);
+    return clone(reply);
+  });
+}
+
+export async function updatePrdComment(commentId: string, content: string, actor?: { id: string; name: string }) {
+  const value = content.trim();
+  if (!value || value.length > 2000) throw new Error("评论内容不能为空且不能超过 2000 字。");
+  return mutate((store) => {
+    const comment = store.comments.find((item) => item.id === commentId && ((item.kind === "prd" && item.commentSchema === "prd_thread_v2") || (item.kind === "html" && item.commentSchema === "html_thread_v1")));
+    if (!comment) throw new Error("评论不存在。");
+    if (comment.deletedAt) throw new Error("已删除的评论不能修改。");
+    if (!sameActor(comment, actor)) throw new Error("只能修改自己的评论。");
+    comment.content = value;
+    comment.updatedAt = now();
+    return clone(comment);
+  });
+}
+
+export async function deletePrdComment(commentId: string, actor?: { id: string; name: string }) {
+  return mutate((store) => {
+    const comment = store.comments.find((item) => item.id === commentId && ((item.kind === "prd" && item.commentSchema === "prd_thread_v2") || (item.kind === "html" && item.commentSchema === "html_thread_v1")));
+    if (!comment) throw new Error("评论不存在。");
+    if (comment.deletedAt) return clone(comment);
+    if (!sameActor(comment, actor)) throw new Error("只能删除自己的评论。");
+    comment.deletedAt = now();
+    comment.deletedBy = actor?.id || "local-dev-user";
+    comment.content = "";
     return clone(comment);
   });
 }
