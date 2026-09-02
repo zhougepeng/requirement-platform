@@ -1,16 +1,17 @@
 import { apiError, apiJson } from "@/lib/api-response";
-import { getRequirementDetail, listVersions, publishRequirementSnapshot } from "@/services/requirement/repository";
+import { getRequirementDetail, listVersionSummaries, listVersions, publishRequirementSnapshot } from "@/services/requirement/repository";
 import { actorFromRequest, isAdministratorActor, publisherFromRequest } from "@/services/auth/request-actor";
 import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, { params }: { params: Promise<{ requirementCode: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ requirementCode: string }> }) {
   try {
-    await actorFromRequest(_request);
+    await actorFromRequest(request);
     const { requirementCode } = await params;
-    return apiJson(await listVersions(requirementCode));
+    const meta = new URL(request.url).searchParams.get("meta") === "true";
+    return apiJson(await (meta ? listVersionSummaries(requirementCode) : listVersions(requirementCode)));
   } catch (error) {
     return apiError(error);
   }

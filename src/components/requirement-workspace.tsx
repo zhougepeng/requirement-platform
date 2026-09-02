@@ -35,9 +35,11 @@ import type {
   RequirementDetail,
   RequirementDiscussion,
   RequirementDocument,
+  RequirementDetailSummary,
   RequirementSummary,
   RequirementTimelineEvent,
   RequirementVersion,
+  RequirementVersionSummary,
 } from "@/lib/types";
 
 type Tab = "demo" | "prd" | "split" | "test-cases" | "versions";
@@ -73,7 +75,11 @@ type MyRequirement = RequirementSummary & {
   projectId: string;
   projectName: string;
 };
-type RequirementStatusFilter = "all" | "offline" | "scheduled" | "online";
+type MyRequirementTimelineGroup = {
+  key: string;
+  label: string;
+  items: MyRequirement[];
+};
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -90,10 +96,16 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 async function fetchRequirementData(requirementCode: string) {
   const code = encodeURIComponent(requirementCode);
   const [detail, versions] = await Promise.all([
-    request<RequirementDetail>(`/api/v1/requirements/${code}`),
-    request<RequirementVersion[]>(`/api/v1/requirements/${code}/versions`),
+    request<RequirementDetailSummary>(`/api/v1/requirements/${code}?meta=true`),
+    request<RequirementVersionSummary[]>(`/api/v1/requirements/${code}/versions?meta=true`),
   ]);
   return { detail, versions };
+}
+
+async function fetchVersionDetail(requirementCode: string, versionNumber: number) {
+  return request<RequirementVersion>(
+    `/api/v1/requirements/${encodeURIComponent(requirementCode)}/versions/${versionNumber}`,
+  );
 }
 
 async function copyText(value: string) {
@@ -508,6 +520,76 @@ function RequirementTimeline({ onOpenRequirement }: { onOpenRequirement: (requir
   );
 }
 
+function myRequirementEventDate(requirement: MyRequirement, status: "scheduled" | "online") {
+  return status === "scheduled"
+    ? requirement.scheduledFullDate ?? requirement.scheduledGrayDate
+    : requirement.releaseDate;
+}
+
+function groupMyRequirementsByMonth(requirements: MyRequirement[], status: "scheduled" | "online"): MyRequirementTimelineGroup[] {
+  const groups = new Map<string, MyRequirementTimelineGroup>();
+  for (const requirement of requirements) {
+    const eventDate = myRequirementEventDate(requirement, status);
+    if (!eventDate || !/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) continue;
+    const key = eventDate.slice(0, 7);
+    const month = Number(eventDate.slice(5, 7));
+    const group = groups.get(key) ?? {
+      key,
+      label: status === "scheduled" ? `${month}月` : `${key.slice(0, 4)}年${month}月`,
+      items: [],
+    };
+    group.items.push(requirement);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      items: group.items.toSorted((left, right) => {
+        const leftDate = myRequirementEventDate(left, status) ?? "";
+        const rightDate = myRequirementEventDate(right, status) ?? "";
+        return rightDate.localeCompare(leftDate) || (right.createdAt ?? "").localeCompare(left.createdAt ?? "");
+      }),
+    }))
+    .toSorted((left, right) => right.key.localeCompare(left.key));
+}
+
+function MyRequirementTimeline({
+  title,
+  status,
+  requirements,
+  onOpenRequirement,
+}: {
+  title: "已排期" | "已上线";
+  status: "scheduled" | "online";
+  requirements: MyRequirement[];
+  onOpenRequirement: (requirementCode: string) => void;
+}) {
+  const groups = useMemo(() => groupMyRequirementsByMonth(requirements, status), [requirements, status]);
+  const dateLabel = status === "scheduled" ? "预计全量" : "上线时间";
+  const versionLabel = status === "scheduled" ? "排期版本" : "上线版本";
+  return <section className="my-requirements-section my-requirements-timeline" aria-label={`${title}需求时间线`}>
+    <header>
+      <div><Icon name="file" /><b>{title}</b><small>{requirements.length}</small></div>
+      <span>按月份查看</span>
+    </header>
+    {groups.length ? groups.map((group) => <article className="timeline-group" key={group.key}>
+      <aside><b>{group.label}</b><small>{group.items.length} 个需求</small></aside>
+      <div className="timeline-group-content">
+        {group.items.map((requirement) => {
+          const eventDate = myRequirementEventDate(requirement, status)!;
+          const version = status === "scheduled" ? requirement.scheduleVersion : requirement.releaseVersion;
+          return <button className="timeline-item" key={requirement.code} onClick={() => onOpenRequirement(requirement.code)}>
+            <time>{eventDate.slice(8, 10)}日</time>
+            <span><strong>{requirement.title}</strong><small>{requirement.projectName}</small></span>
+            <span className="timeline-item-meta"><b>{versionLabel} {version || "--"}</b><small>{dateLabel} {eventDate}</small></span>
+            <Icon name="chevron" />
+          </button>;
+        })}
+      </div>
+    </article>) : <p className="my-requirements-empty">暂无带明确{status === "scheduled" ? "预计全量" : "上线"}时间的需求。</p>}
+  </section>;
+}
+
 function MonthlyReleaseChart({
   months,
 }: {
@@ -605,7 +687,6 @@ function MyRequirements({
 }: {
   onOpenRequirement: (requirementCode: string) => void;
 }) {
-  const [statusFilter, setStatusFilter] = useState<RequirementStatusFilter>("offline");
   const [myRequirements, setMyRequirements] = useState<MyRequirement[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -629,61 +710,49 @@ function MyRequirements({
       cancelled = true;
     };
   }, []);
-  const countFor = (status: RequirementStatusFilter) =>
-    status === "all"
-      ? myRequirements.length
-      : myRequirements.filter((requirement) => (requirement.status ?? "offline") === status).length;
-  const visibleRequirements = myRequirements.filter(
-    (requirement) => statusFilter === "all" || (requirement.status ?? "offline") === statusFilter,
+  const offlineRequirements = useMemo(
+    () => myRequirements.filter((requirement) => (requirement.status ?? "offline") === "offline"),
+    [myRequirements],
   );
-  const filters: Array<{ value: RequirementStatusFilter; label: string }> = [
-    { value: "offline", label: "未上线" },
-    { value: "scheduled", label: "已排期" },
-    { value: "online", label: "已上线" },
-    { value: "all", label: "全部" },
-  ];
-  const emptyText = statusFilter === "all" ? "暂无我负责的需求" : `暂无${filters.find((item) => item.value === statusFilter)?.label ?? ""}需求`;
+  const scheduledRequirements = useMemo(
+    () => myRequirements.filter((requirement) => requirement.status === "scheduled"),
+    [myRequirements],
+  );
+  const onlineRequirements = useMemo(
+    () => myRequirements.filter((requirement) => requirement.status === "online"),
+    [myRequirements],
+  );
+  const ongoingProjects = useMemo(
+    () => new Set([...offlineRequirements, ...scheduledRequirements].map((requirement) => requirement.projectId)).size,
+    [offlineRequirements, scheduledRequirements],
+  );
   return (
     <section className="my-requirements-page" aria-label="我的需求">
       <header>
         <h1>我的需求</h1>
-        <div className="my-requirements-filters" role="tablist" aria-label="按上线状态筛选">
-          {filters.map((filter) => {
-            const count = countFor(filter.value);
-            return (
-              <button
-                key={filter.value}
-                type="button"
-                role="tab"
-                aria-selected={statusFilter === filter.value}
-                className={statusFilter === filter.value ? "is-active" : ""}
-                onClick={() => setStatusFilter(filter.value)}
-              >
-                {filter.label}{filter.value !== "all" && count > 0 ? `（${count}）` : ""}
-              </button>
-            );
-          })}
+        <div className="my-requirements-overview">
+          <div className="board-metric is-ongoing"><span className="board-metric-icon"><Icon name="folder" /></span><div><small>进行中项目</small><b>{ongoingProjects}</b></div></div>
+          <div className="board-metric is-offline"><span className="board-metric-icon"><Icon name="file" /></span><div><small>未上线</small><b>{offlineRequirements.length}</b></div></div>
+          <div className="board-metric is-online"><span className="board-metric-icon"><Icon name="check" /></span><div><small>已上线</small><b>{onlineRequirements.length}</b></div></div>
         </div>
       </header>
       {loading ? <p className="my-requirements-empty">正在加载我的需求...</p> : loadError ? (
         <p className="my-requirements-empty is-error">{loadError}</p>
-      ) : visibleRequirements.length ? (
-        <div className="my-requirements-list">
-          <div className="my-requirements-head"><span>需求名称</span><span>所属项目</span><span>状态</span><span>创建时间</span></div>
-          {visibleRequirements.map((requirement) => {
-            const status = requirement.status ?? "offline";
-            const statusLabel = status === "online" ? "已上线" : status === "scheduled" ? "已排期" : "未上线";
-            return (
-              <button key={requirement.code} type="button" onClick={() => onOpenRequirement(requirement.code)}>
-                <span><small>{requirement.code}</small><b title={requirement.title}>{requirement.title}</b></span>
-                <span title={requirement.projectName}>{requirement.projectName}</span>
-                <em className={`my-requirement-status is-${status}`}>{statusLabel}</em>
-                <time>{requirement.createdAt ?? "--"}</time>
-              </button>
-            );
-          })}
-        </div>
-      ) : <p className="my-requirements-empty">{emptyText}</p>}
+      ) : <>
+        <section className="my-requirements-section" aria-label="未上线需求">
+          <header><div><Icon name="file" /><b>未上线</b><small>{offlineRequirements.length}</small></div></header>
+          {offlineRequirements.length ? <div className="my-requirements-list">
+            <div className="my-requirements-head"><span>需求名称</span><span>所属项目</span><span>创建时间</span></div>
+            {offlineRequirements.map((requirement) => <button key={requirement.code} type="button" onClick={() => onOpenRequirement(requirement.code)}>
+              <span><small>{requirement.code}</small><b title={requirement.title}>{requirement.title}</b></span>
+              <span title={requirement.projectName}>{requirement.projectName}</span>
+              <time>{requirement.createdAt ?? "--"}</time>
+            </button>)}
+          </div> : <p className="my-requirements-empty">暂无未上线需求。</p>}
+        </section>
+        <MyRequirementTimeline title="已排期" status="scheduled" requirements={scheduledRequirements} onOpenRequirement={onOpenRequirement} />
+        <MyRequirementTimeline title="已上线" status="online" requirements={onlineRequirements} onOpenRequirement={onOpenRequirement} />
+      </>}
     </section>
   );
 }
@@ -866,8 +935,10 @@ export function RequirementWorkspace({
     RequirementSummary[]
   >([]);
   const [activeProjectId, setActiveProjectId] = useState("");
-  const [detail, setDetail] = useState<RequirementDetail | null>(null);
+  const [detail, setDetail] = useState<RequirementDetail | RequirementDetailSummary | null>(null);
   const [versions, setVersions] = useState<RequirementVersion[]>([]);
+  const [loadedVersionDetails, setLoadedVersionDetails] = useState<Record<string, RequirementVersion>>({});
+  const [loadingVersionId, setLoadingVersionId] = useState<string | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState("");
   const [selectedPrdDocumentId, setSelectedPrdDocumentId] = useState("");
   const [selectedDemoDocumentId, setSelectedDemoDocumentId] = useState("");
@@ -921,9 +992,10 @@ export function RequirementWorkspace({
 
   const selectedVersion = useMemo(
     () =>
+      loadedVersionDetails[selectedVersionId] ??
       versions.find((version) => version.id === selectedVersionId) ??
       versions[0],
-    [selectedVersionId, versions],
+    [loadedVersionDetails, selectedVersionId, versions],
   );
   const prdDocuments = useMemo<RequirementDocument[]>(() => {
     if (!selectedVersion) return [];
@@ -966,6 +1038,7 @@ export function RequirementWorkspace({
   const selectedPrdSource = selectedPrdDocument?.content ?? selectedVersion?.prd ?? "";
   const selectedPrdAssetBaseUrl = selectedPrdDocument?.url;
   const selectedDemoUrl = selectedDemoDocument?.url ?? selectedVersion?.demoEntryUrl ?? "";
+  const selectedVersionLoaded = Boolean(selectedVersion && loadedVersionDetails[selectedVersion.id]);
   const prdThreadCount = prdComments.filter((comment) => !comment.parentId).length;
   const htmlThreadCount = htmlComments.filter((comment) => !comment.parentId).length;
   const openDiscussionCount = discussions.filter((item) => !item.parentId && item.status !== "closed").length;
@@ -979,6 +1052,40 @@ export function RequirementWorkspace({
     projects.find((project) => project.id === activeProjectId) ??
     detail?.project ??
     projects[0];
+
+  const loadSelectedVersionDetail = useCallback(async () => {
+    if (!detail || !selectedVersion || loadedVersionDetails[selectedVersion.id] || loadingVersionId === selectedVersion.id) return;
+    setLoadingVersionId(selectedVersion.id);
+    try {
+      const loaded = await fetchVersionDetail(detail.requirement.code, selectedVersion.number);
+      setLoadedVersionDetails((current) => ({ ...current, [loaded.id]: loaded }));
+      setError("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法读取当前版本内容。");
+    } finally {
+      setLoadingVersionId((current) => current === selectedVersion.id ? null : current);
+    }
+  }, [detail, loadedVersionDetails, loadingVersionId, selectedVersion]);
+
+  const selectTab = useCallback((nextTab: Tab) => {
+    setTab(nextTab);
+    if (nextTab === "prd" || nextTab === "split" || nextTab === "versions") void loadSelectedVersionDetail();
+  }, [loadSelectedVersionDetail]);
+
+  const handleSelectVersion = useCallback((versionId: string) => {
+    selectVersion(versionId);
+    const nextVersion = versions.find((version) => version.id === versionId);
+    const requirementCode = detail?.requirement.code;
+    if (!nextVersion || !requirementCode || loadedVersionDetails[nextVersion.id] || (tab !== "prd" && tab !== "split" && tab !== "versions")) return;
+    setLoadingVersionId(nextVersion.id);
+    void fetchVersionDetail(requirementCode, nextVersion.number)
+      .then((loaded) => {
+        setLoadedVersionDetails((current) => ({ ...current, [loaded.id]: loaded }));
+        setError("");
+      })
+      .catch((reason) => setError(reason instanceof Error ? reason.message : "无法读取当前版本内容。"))
+      .finally(() => setLoadingVersionId((current) => current === nextVersion.id ? null : current));
+  }, [detail?.requirement.code, loadedVersionDetails, selectVersion, tab, versions]);
 
   const splitRatioKey = detail
     ? `requirement-platform:split-ratio:v2:${detail.requirement.code}`
@@ -1009,13 +1116,14 @@ export function RequirementWorkspace({
     const requirementCode = detail?.requirement.code;
     const versionId = selectedVersion?.id;
     const documentId = selectedPrdDocument?.id;
-    if (!requirementCode || !versionId || !documentId) return;
+    if (tab !== "prd" && tab !== "split") return;
+    if (!requirementCode || !versionId || !documentId || !selectedPrdSource) return;
     let active = true;
     void request<RequirementComment[]>(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/comments?version_id=${encodeURIComponent(versionId)}&document_id=${encodeURIComponent(documentId)}`)
       .then((comments) => { if (active) { setPrdComments(comments); setActivePrdCommentId(null); } })
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法读取 PRD 评论。"); });
     return () => { active = false; };
-  }, [detail?.requirement.code, selectedPrdDocument?.id, selectedVersion?.id]);
+  }, [detail?.requirement.code, selectedPrdDocument?.id, selectedVersion?.id, selectedPrdSource, tab]);
 
   useEffect(() => {
     const requirementCode = detail?.requirement.code;
@@ -1066,7 +1174,9 @@ export function RequirementWorkspace({
   }, [projectContextMenu]);
 
   useEffect(() => {
-    if (!activeProjectId) return;
+    // The detail shell already has the requirement and project metadata. Load
+    // the full project requirement list only when the list view is visible.
+    if (!activeProjectId || view !== "requirements") return;
     const suffix = showArchived ? "?include_archived=true" : "";
     void request<RequirementSummary[]>(
       `/api/v1/projects/${encodeURIComponent(activeProjectId)}/requirements${suffix}`,
@@ -1077,7 +1187,7 @@ export function RequirementWorkspace({
           reason instanceof Error ? reason.message : "无法读取项目需求。",
         ),
       );
-  }, [activeProjectId, showArchived]);
+  }, [activeProjectId, showArchived, view]);
 
   useEffect(() => {
     if (!draggingSplit) return;
@@ -1120,6 +1230,7 @@ export function RequirementWorkspace({
         const { detail: nextDetail, versions: nextVersions } = await fetchRequirementData(requirementCode);
         setDetail(nextDetail);
         setVersions(nextVersions);
+        setLoadedVersionDetails({});
         selectVersion(
           nextVersions.find((version) => version.number === versionNumber)
             ?.id ?? nextDetail.currentVersion.id,
@@ -1145,10 +1256,14 @@ export function RequirementWorkspace({
     const demoDocumentId = selectedDemoDocumentId;
     setRefreshingRequirement(true);
     try {
-      const { detail: nextDetail, versions: nextVersions } = await fetchRequirementData(detail.requirement.code);
+      const [{ detail: nextDetail, versions: nextVersions }, refreshedVersion] = await Promise.all([
+        fetchRequirementData(detail.requirement.code),
+        fetchVersionDetail(detail.requirement.code, versionNumber),
+      ]);
       const nextVersion = nextVersions.find((version) => version.number === versionNumber) ?? nextDetail.currentVersion;
       setDetail(nextDetail);
       setVersions(nextVersions);
+      setLoadedVersionDetails({ [refreshedVersion.id]: refreshedVersion });
       setSelectedVersionId(nextVersion.id);
       setSelectedPrdDocumentId(prdDocumentId);
       setSelectedDemoDocumentId(demoDocumentId);
@@ -1179,19 +1294,26 @@ export function RequirementWorkspace({
           setLoading(false);
           return;
         }
-        const nextProjects = await request<Project[]>("/api/v1/projects");
-        setProjects(nextProjects);
+        const projectsPromise = request<Project[]>("/api/v1/projects");
         if (startInDetail && initialRequirementCode) {
           const result = await fetchRequirementData(initialRequirementCode);
           setDetail(result.detail);
           setVersions(result.versions);
+          setLoadedVersionDetails({});
           setActiveProjectId(result.detail.project.id);
           selectVersion(
             result.versions.find(
               (version) => version.number === initialVersionNumber,
             )?.id ?? result.detail.currentVersion.id,
           );
+          setLoading(false);
+          void projectsPromise
+            .then(setProjects)
+            .catch((reason) => setError(reason instanceof Error ? reason.message : "无法读取项目目录。"));
+          return;
         } else {
+          const nextProjects = await projectsPromise;
+          setProjects(nextProjects);
           setView("board");
         }
         setLoading(false);
@@ -1335,7 +1457,7 @@ export function RequirementWorkspace({
         { method: "POST", body: JSON.stringify({}) },
       );
       await loadRequirement(detail.requirement.code, result.version.number);
-      setTab("versions");
+      selectTab("versions");
       showNotice(`已从 V${version.number} 创建 V${result.version.number}。`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "恢复版本失败。");
@@ -1915,7 +2037,7 @@ export function RequirementWorkspace({
                 >
                   <button
                     className={tab === "demo" ? "is-active" : ""}
-                    onClick={() => setTab("demo")}
+                    onClick={() => selectTab("demo")}
                     role="tab"
                     aria-selected={tab === "demo"}
                   >
@@ -1923,7 +2045,7 @@ export function RequirementWorkspace({
                   </button>
                   <button
                     className={tab === "prd" ? "is-active" : ""}
-                    onClick={() => setTab("prd")}
+                    onClick={() => selectTab("prd")}
                     role="tab"
                     aria-selected={tab === "prd"}
                   >
@@ -1931,7 +2053,7 @@ export function RequirementWorkspace({
                   </button>
                   <button
                     className={tab === "split" ? "is-active" : ""}
-                    onClick={() => setTab("split")}
+                    onClick={() => selectTab("split")}
                     role="tab"
                     aria-selected={tab === "split"}
                   >
@@ -1939,7 +2061,7 @@ export function RequirementWorkspace({
                   </button>
                   <button
                     className={tab === "test-cases" ? "is-active" : ""}
-                    onClick={() => setTab("test-cases")}
+                    onClick={() => selectTab("test-cases")}
                     role="tab"
                     aria-selected={tab === "test-cases"}
                   >
@@ -1947,7 +2069,7 @@ export function RequirementWorkspace({
                   </button>
                   <button
                     className={tab === "versions" ? "is-active" : ""}
-                    onClick={() => setTab("versions")}
+                    onClick={() => selectTab("versions")}
                     role="tab"
                     aria-selected={tab === "versions"}
                   >
@@ -2018,7 +2140,7 @@ export function RequirementWorkspace({
                     <span className="sr-only">选择版本</span>
                     <select
                       value={selectedVersion!.id}
-                      onChange={(event) => selectVersion(event.target.value)}
+                      onChange={(event) => handleSelectVersion(event.target.value)}
                     >
                       {versions.map((version) => (
                         <option key={version.id} value={version.id}>
@@ -2057,7 +2179,7 @@ export function RequirementWorkspace({
                 versions={versions}
                 selected={selectedVersion!}
                 canPublish={currentUser.canPublish}
-                onSelect={selectVersion}
+                onSelect={handleSelectVersion}
                 onRestore={(version) => void restoreVersion(version)}
               />
             ) : tab === "test-cases" ? (
@@ -2065,6 +2187,10 @@ export function RequirementWorkspace({
                 requirementCode={detail!.requirement.code}
                 versionNo={selectedVersion!.number}
               />
+            ) : (tab === "prd" || tab === "split") && !selectedVersionLoaded ? (
+              <section className="content-surface content-loading-state" aria-busy={loadingVersionId === selectedVersion?.id}>
+                <p>{loadingVersionId === selectedVersion?.id ? "正在加载 PRD…" : "当前版本 PRD 暂不可用，请点击刷新重试。"}</p>
+              </section>
             ) : tab === "split" ? (
               <section
                 ref={splitContainerRef}

@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion } from "@/lib/types";
+import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -461,6 +461,31 @@ export async function getRequirementDetail(requirementCode: string): Promise<Req
   return clone({ project, requirement, currentVersion });
 }
 
+function versionSummary(version: RequirementVersion): RequirementVersionSummary {
+  const metadata = {
+    ...version,
+    prd: "" as const,
+    documents: version.documents?.map((document) => {
+      const copy = { ...document };
+      delete copy.content;
+      return copy;
+    }),
+  };
+  delete metadata.assetManifest;
+  return metadata as RequirementVersionSummary;
+}
+
+/** Returns only the fields required to render the detail shell and Demo first. */
+export async function getRequirementDetailSummary(requirementCode: string): Promise<RequirementDetailSummary> {
+  const store = await ensureStore();
+  const requirement = store.requirements.find((item) => item.code === requirementCode);
+  if (!requirement) throw new Error("需求不存在。");
+  const project = store.projects.find((item) => item.id === requirement.projectId);
+  const currentVersion = store.versions.find((item) => item.id === requirement.currentVersionId);
+  if (!project || !currentVersion) throw new Error("需求数据不完整。");
+  return clone({ project, requirement, currentVersion: versionSummary(currentVersion) });
+}
+
 export async function listProjectRequirements(projectId: string, includeArchived = false) {
   const store = await ensureStore();
   const project = store.projects.find((item) => item.id === projectId);
@@ -647,6 +672,14 @@ export async function listVersions(requirementCode: string) {
   return clone(store.versions.filter((item) => item.requirementCode === requirementCode).toSorted((a, b) => b.number - a.number));
 }
 
+export async function listVersionSummaries(requirementCode: string): Promise<RequirementVersionSummary[]> {
+  const store = await ensureStore();
+  return clone(store.versions
+    .filter((item) => item.requirementCode === requirementCode)
+    .toSorted((a, b) => b.number - a.number)
+    .map(versionSummary));
+}
+
 export async function getVersion(requirementCode: string, versionNo: number) {
   const store = await ensureStore();
   const version = store.versions.find((item) => item.requirementCode === requirementCode && item.number === versionNo);
@@ -743,10 +776,6 @@ export async function listCurrentRequirementKnowledgeSources() {
 function prdDocumentsForVersion(version: RequirementVersion) {
   const documents = version.documents?.filter((document) => document.kind === "prd" && document.content?.trim());
   return documents?.length ? documents : [{ id: `${version.id}:prd`, name: "PRD.md", path: "PRD.md", kind: "prd" as const, mimeType: "text/markdown", order: 0, content: version.prd }];
-}
-
-function versionPrdText(version: RequirementVersion) {
-  return prdDocumentsForVersion(version).map((document) => `# 文件：${document.name}\n${document.content ?? ""}`).join("\n\n");
 }
 
 export type RequirementKnowledgeMatch = {

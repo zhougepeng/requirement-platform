@@ -14,6 +14,13 @@ export type RequirementVersion = {
   documents?: RequirementDocument[];
 };
 
+/** Lightweight version metadata used by the requirement detail first paint. */
+export type RequirementVersionSummary = Omit<RequirementVersion, "prd" | "documents" | "assetManifest"> & {
+  prd: "";
+  documents?: Array<Omit<RequirementDocument, "content">>;
+  assetManifest?: undefined;
+};
+
 export type RequirementDocumentKind = "prd" | "demo";
 export type RequirementDocument = {
   id: string;
@@ -224,4 +231,8 @@ export type RequirementDetail = {
   project: Project;
   requirement: Requirement;
   currentVersion: RequirementVersion;
+};
+
+export type RequirementDetailSummary = Omit<RequirementDetail, "currentVersion"> & {
+  currentVersion: RequirementVersionSummary;
 };

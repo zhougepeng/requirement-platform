@@ -35,7 +35,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ segm
     const body = await readFile(filePath);
     const contentType = MIME[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
     const headers = new Headers({ "Content-Type": contentType, "X-Content-Type-Options": "nosniff" });
-    if (contentType.startsWith("text/html")) headers.set("Content-Security-Policy", "default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; connect-src 'none'; base-uri 'none'");
+    // Demo pages are served from this same route, so their relative images,
+    // styles and scripts must be allowed as same-origin resources. Keep all
+    // external/network capabilities disabled.
+    if (contentType.startsWith("text/html")) headers.set("Content-Security-Policy", "default-src 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self' data:; form-action 'none'; connect-src 'none'; base-uri 'none'");
     return new Response(body, { headers });
   } catch {
     return new Response("Not found", { status: 404 });
