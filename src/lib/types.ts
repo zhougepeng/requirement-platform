@@ -72,6 +72,27 @@ export type RequirementComment = {
   content: string;
 };
 
+/** Requirement-level R&D discussion. It deliberately has no version or document anchor. */
+export type RequirementDiscussion = {
+  id: string;
+  requirementCode: string;
+  parentId?: string;
+  authorId?: string;
+  author: string;
+  initials: string;
+  tone: "blue" | "green" | "violet";
+  content: string;
+  createdAt: string;
+  updatedAt?: string;
+  deletedAt?: string;
+  status?: "open" | "closed";
+  resolution?: "resolved" | "rejected" | "related_requirement";
+  resolutionNote?: string;
+  relatedRequirementCode?: string;
+  handledAt?: string;
+  handledBy?: string;
+};
+
 export type RequirementGap = {
   id: string;
   requirementCode: string;
@@ -189,6 +210,8 @@ export type RequirementStore = {
   requirements: Requirement[];
   versions: RequirementVersion[];
   comments: RequirementComment[];
+  /** Optional for backward compatibility with stores created before requirement discussions. */
+  discussions?: RequirementDiscussion[];
   artifacts: DemoArtifact[];
   /** Optional for backward compatibility with existing local stores. */
   gaps?: RequirementGap[];

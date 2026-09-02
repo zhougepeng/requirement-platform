@@ -15,6 +15,7 @@ import { ProjectDialog } from "@/components/project-dialog";
 import { SnapshotPublishDialog } from "@/components/snapshot-publish-dialog";
 import { RequirementShareDialog } from "@/components/requirement-share-dialog";
 import { PrdCommentPanel } from "@/components/prd-comment-panel";
+import { RequirementDiscussionPanel } from "@/components/requirement-discussion-panel";
 import { VersionAssetsPanel } from "@/components/version-assets-panel";
 import { Icon } from "@/components/icons";
 import { RequirementMarkdown } from "@/components/requirement-markdown";
@@ -32,6 +33,7 @@ import type {
   PrdCommentAnchor,
   RequirementComment,
   RequirementDetail,
+  RequirementDiscussion,
   RequirementDocument,
   RequirementSummary,
   RequirementTimelineEvent,
@@ -39,7 +41,7 @@ import type {
 } from "@/lib/types";
 
 type Tab = "demo" | "prd" | "split" | "test-cases" | "versions";
-type View = "board" | "detail" | "projects" | "requirements" | "materials";
+type View = "board" | "detail" | "projects" | "requirements" | "materials" | "my-requirements";
 type ApiResponse<T> =
   { data: T; error?: never } | { data?: never; error: string };
 type CurrentUser = {
@@ -67,6 +69,11 @@ type RequirementTimelinePage = {
   groups: RequirementTimelineGroup[];
   nextCursor?: string;
 };
+type MyRequirement = RequirementSummary & {
+  projectId: string;
+  projectName: string;
+};
+type RequirementStatusFilter = "all" | "offline" | "scheduled" | "online";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -117,20 +124,16 @@ async function copyText(value: string) {
 function ProjectDirectory({
   projects,
   activeProjectId,
-  favoriteProjectIds,
   canManageProjects,
   onOpenProject,
-  onToggleFavorite,
   onOpenPublish,
   onEditProject,
   onToggleArchive,
 }: {
   projects: Project[];
   activeProjectId: string;
-  favoriteProjectIds: string[];
   canManageProjects?: boolean;
   onOpenProject: (project: Project) => void;
-  onToggleFavorite: (projectId: string) => void;
   onOpenPublish: () => void;
   onEditProject: (project: Project) => void;
   onToggleArchive: (project: Project) => void;
@@ -228,22 +231,6 @@ function ProjectDirectory({
                     </button>
                   </>
                 ) : null}
-                <button
-                  className={`favorite-button ${favoriteProjectIds.includes(project.id) ? "is-favorite" : ""}`}
-                  onClick={() => onToggleFavorite(project.id)}
-                  aria-label={
-                    favoriteProjectIds.includes(project.id)
-                      ? `取消关注 ${project.name}`
-                      : `关注 ${project.name}`
-                  }
-                  title={
-                    favoriteProjectIds.includes(project.id)
-                      ? "取消关注"
-                      : "关注项目"
-                  }
-                >
-                  <Icon name="star" />
-                </button>
               </div>
             ))}
           </div>
@@ -613,6 +600,94 @@ function BoardOwnerTable({
   );
 }
 
+function MyRequirements({
+  onOpenRequirement,
+}: {
+  onOpenRequirement: (requirementCode: string) => void;
+}) {
+  const [statusFilter, setStatusFilter] = useState<RequirementStatusFilter>("offline");
+  const [myRequirements, setMyRequirements] = useState<MyRequirement[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void request<MyRequirement[]>("/api/v1/requirements/mine")
+      .then((requirements) => {
+        if (cancelled) return;
+        setMyRequirements(requirements);
+        setLoadError("");
+      })
+      .catch((reason) => {
+        if (cancelled) return;
+        setLoadError(reason instanceof Error ? reason.message : "无法读取我的需求。");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const countFor = (status: RequirementStatusFilter) =>
+    status === "all"
+      ? myRequirements.length
+      : myRequirements.filter((requirement) => (requirement.status ?? "offline") === status).length;
+  const visibleRequirements = myRequirements.filter(
+    (requirement) => statusFilter === "all" || (requirement.status ?? "offline") === statusFilter,
+  );
+  const filters: Array<{ value: RequirementStatusFilter; label: string }> = [
+    { value: "offline", label: "未上线" },
+    { value: "scheduled", label: "已排期" },
+    { value: "online", label: "已上线" },
+    { value: "all", label: "全部" },
+  ];
+  const emptyText = statusFilter === "all" ? "暂无我负责的需求" : `暂无${filters.find((item) => item.value === statusFilter)?.label ?? ""}需求`;
+  return (
+    <section className="my-requirements-page" aria-label="我的需求">
+      <header>
+        <h1>我的需求</h1>
+        <div className="my-requirements-filters" role="tablist" aria-label="按上线状态筛选">
+          {filters.map((filter) => {
+            const count = countFor(filter.value);
+            return (
+              <button
+                key={filter.value}
+                type="button"
+                role="tab"
+                aria-selected={statusFilter === filter.value}
+                className={statusFilter === filter.value ? "is-active" : ""}
+                onClick={() => setStatusFilter(filter.value)}
+              >
+                {filter.label}{filter.value !== "all" && count > 0 ? `（${count}）` : ""}
+              </button>
+            );
+          })}
+        </div>
+      </header>
+      {loading ? <p className="my-requirements-empty">正在加载我的需求...</p> : loadError ? (
+        <p className="my-requirements-empty is-error">{loadError}</p>
+      ) : visibleRequirements.length ? (
+        <div className="my-requirements-list">
+          <div className="my-requirements-head"><span>需求名称</span><span>所属项目</span><span>状态</span><span>创建时间</span></div>
+          {visibleRequirements.map((requirement) => {
+            const status = requirement.status ?? "offline";
+            const statusLabel = status === "online" ? "已上线" : status === "scheduled" ? "已排期" : "未上线";
+            return (
+              <button key={requirement.code} type="button" onClick={() => onOpenRequirement(requirement.code)}>
+                <span><small>{requirement.code}</small><b title={requirement.title}>{requirement.title}</b></span>
+                <span title={requirement.projectName}>{requirement.projectName}</span>
+                <em className={`my-requirement-status is-${status}`}>{statusLabel}</em>
+                <time>{requirement.createdAt ?? "--"}</time>
+              </button>
+            );
+          })}
+        </div>
+      ) : <p className="my-requirements-empty">{emptyText}</p>}
+    </section>
+  );
+}
+
 function RequirementList({
   project,
   requirements,
@@ -790,7 +865,6 @@ export function RequirementWorkspace({
   const [projectRequirements, setProjectRequirements] = useState<
     RequirementSummary[]
   >([]);
-  const [favoriteProjectIds, setFavoriteProjectIds] = useState<string[]>([]);
   const [activeProjectId, setActiveProjectId] = useState("");
   const [detail, setDetail] = useState<RequirementDetail | null>(null);
   const [versions, setVersions] = useState<RequirementVersion[]>([]);
@@ -804,6 +878,8 @@ export function RequirementWorkspace({
   const [prdCommentMode, setPrdCommentMode] = useState(false);
   const [htmlComments, setHtmlComments] = useState<RequirementComment[]>([]);
   const [htmlCommentMode, setHtmlCommentMode] = useState(false);
+  const [discussions, setDiscussions] = useState<RequirementDiscussion[]>([]);
+  const [discussionsOpen, setDiscussionsOpen] = useState(false);
   const [documentRefreshKey, setDocumentRefreshKey] = useState(0);
   const [refreshingRequirement, setRefreshingRequirement] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser>({
@@ -892,6 +968,13 @@ export function RequirementWorkspace({
   const selectedDemoUrl = selectedDemoDocument?.url ?? selectedVersion?.demoEntryUrl ?? "";
   const prdThreadCount = prdComments.filter((comment) => !comment.parentId).length;
   const htmlThreadCount = htmlComments.filter((comment) => !comment.parentId).length;
+  const openDiscussionCount = discussions.filter((item) => !item.parentId && item.status !== "closed").length;
+  const canProcessDiscussions = Boolean(
+    currentUser.canPublish ||
+    currentUser.isAdmin ||
+    (detail?.requirement.ownerId && detail.requirement.ownerId === currentUser.openId) ||
+    (detail?.requirement.owner && detail.requirement.owner === currentUser.name),
+  );
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ??
     detail?.project ??
@@ -912,25 +995,6 @@ export function RequirementWorkspace({
     const timer = window.setTimeout(() => setSplitRatio(nextRatio), 0);
     return () => window.clearTimeout(timer);
   }, [splitRatioKey]);
-
-  useEffect(() => {
-    const key = `requirement-platform:favorite-projects:${currentUser.mode === "feishu" ? currentUser.name : "local"}`;
-    const stored = window.localStorage.getItem(key);
-    const timer = window.setTimeout(() => {
-      try {
-        setFavoriteProjectIds(
-          stored
-            ? (JSON.parse(stored) as string[]).filter(
-                (id) => typeof id === "string",
-              )
-            : [],
-        );
-      } catch {
-        setFavoriteProjectIds([]);
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [currentUser.mode, currentUser.name]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(showArchivedKey);
@@ -964,6 +1028,26 @@ export function RequirementWorkspace({
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法读取 HTML 评论。"); });
     return () => { active = false; };
   }, [detail?.requirement.code, selectedDemoDocument?.id, selectedVersion?.id]);
+
+  // This discussion stream is intentionally scoped only by requirement code:
+  // switching Demo, PRD, or a historical version must not change it.
+  useEffect(() => {
+    const requirementCode = detail?.requirement.code;
+    if (!requirementCode) return;
+    let active = true;
+    void request<RequirementDiscussion[]>(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/discussions`)
+      .then((items) => {
+        if (!active) return;
+        setDiscussions(items);
+        // Keep a manually opened empty panel open while the first data request
+        // settles; existing discussions still open the panel by default.
+        setDiscussionsOpen((open) => open || items.some((item) => !item.parentId));
+      })
+      .catch((reason) => {
+        if (active) setError(reason instanceof Error ? reason.message : "无法读取需求讨论。");
+      });
+    return () => { active = false; };
+  }, [detail?.requirement.code]);
 
   useEffect(() => {
     const openTestCases = () => setTab("test-cases");
@@ -1170,6 +1254,47 @@ export function RequirementWorkspace({
     const updated = await request<RequirementComment>(`/api/v1/requirements/${encodeURIComponent(comment.requirementCode)}/comments/${encodeURIComponent(comment.id)}`, { method: "DELETE" });
     if (updated.kind === "html") setHtmlComments((current) => current.map((item) => item.id === updated.id ? updated : item));
     else setPrdComments((current) => current.map((item) => item.id === updated.id ? updated : item));
+  }
+
+  async function createRequirementDiscussion(content: string) {
+    if (!detail) throw new Error("当前需求不可用。");
+    const discussion = await request<RequirementDiscussion>(`/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/discussions`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    });
+    setDiscussions((current) => [...current, discussion]);
+    setDiscussionsOpen(true);
+  }
+
+  async function replyRequirementDiscussion(threadId: string, content: string) {
+    if (!detail) throw new Error("当前需求不可用。");
+    const reply = await request<RequirementDiscussion>(`/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/discussions`, {
+      method: "POST",
+      body: JSON.stringify({ parent_id: threadId, content }),
+    });
+    setDiscussions((current) => [...current, reply]);
+  }
+
+  async function processRequirementDiscussion(threadId: string, resolution: "resolved" | "rejected" | "related_requirement", note: string, relatedRequirementCode?: string) {
+    if (!detail) throw new Error("当前需求不可用。");
+    const updated = await request<RequirementDiscussion>(`/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/discussions/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ action: "process", resolution, note, related_requirement_code: relatedRequirementCode }),
+    });
+    setDiscussions((current) => current.map((item) => item.id === updated.id ? updated : item));
+  }
+
+  async function updateRequirementDiscussion(item: RequirementDiscussion, content: string) {
+    const updated = await request<RequirementDiscussion>(`/api/v1/requirements/${encodeURIComponent(item.requirementCode)}/discussions/${encodeURIComponent(item.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ content }),
+    });
+    setDiscussions((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
+  }
+
+  async function deleteRequirementDiscussion(item: RequirementDiscussion) {
+    const updated = await request<RequirementDiscussion>(`/api/v1/requirements/${encodeURIComponent(item.requirementCode)}/discussions/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+    setDiscussions((current) => current.map((entry) => entry.id === updated.id ? updated : entry));
   }
 
   async function handlePublished(result: {
@@ -1397,17 +1522,6 @@ export function RequirementWorkspace({
     };
   }, [loading, showArchived]);
 
-  function toggleFavorite(projectId: string) {
-    const key = `requirement-platform:favorite-projects:${currentUser.mode === "feishu" ? currentUser.name : "local"}`;
-    setFavoriteProjectIds((current) => {
-      const next = current.includes(projectId)
-        ? current.filter((id) => id !== projectId)
-        : [...current, projectId];
-      window.localStorage.setItem(key, JSON.stringify(next));
-      return next;
-    });
-  }
-
   if (loading)
     return (
       <main className="main-panel">
@@ -1439,9 +1553,6 @@ export function RequirementWorkspace({
       </main>
     );
 
-  const favoriteProjects = projects.filter((project) =>
-    favoriteProjectIds.includes(project.id),
-  );
   return (
     <div className={`workspace ${view === "detail" ? "is-detail" : ""}`}>
       {view !== "detail" ? (
@@ -1462,6 +1573,15 @@ export function RequirementWorkspace({
               <Icon name="book" />
               <span>需求看板</span>
             </button>
+            {currentUser.canPublish ? (
+              <button
+                className={`nav-item ${view === "my-requirements" ? "is-selected" : ""}`}
+                onClick={() => setView("my-requirements")}
+              >
+                <Icon name="file" />
+                <span>我的需求</span>
+              </button>
+            ) : null}
             <button
               className={`nav-item ${view === "materials" ? "is-selected" : ""}`}
               onClick={() => setView("materials")}
@@ -1469,29 +1589,6 @@ export function RequirementWorkspace({
               <Icon name="file" />
               <span>资料库</span>
             </button>
-            <div className="nav-caption nav-caption-with-action">
-              <span>我的项目</span>
-            </div>
-            {favoriteProjects.length ? (
-              favoriteProjects.map((project) => (
-                <button
-                  className={`project-nav ${project.id === activeProject?.id && view === "requirements" ? "is-selected" : ""}`}
-                  key={project.id}
-                  onContextMenu={(event) => openProjectContextMenu(event, project)}
-                  onClick={() => {
-                    setProjectContextMenu(null);
-                    setActiveProjectId(project.id);
-                    setView("requirements");
-                  }}
-                >
-                  <Icon name="folder" />
-                  <span>{project.name}</span>
-                  <Icon name="star" className="sidebar-star" />
-                </button>
-              ))
-            ) : (
-              <p className="sidebar-empty">关注的项目会显示在这里</p>
-            )}
             <div className="nav-caption nav-caption-with-action">
               <span>项目目录</span>
               {currentUser.canPublish ? (
@@ -1741,15 +1838,17 @@ export function RequirementWorkspace({
             }}
             onOpenRequirement={openRequirement}
           />
+        ) : view === "my-requirements" && currentUser.canPublish ? (
+          <MyRequirements
+            onOpenRequirement={openRequirement}
+          />
         ) : view === "materials" ? (
           <MaterialLibrary projects={projects} canEdit={currentUser.canPublish} />
         ) : view === "projects" || (view === "requirements" && !activeProject) ? (
           <ProjectDirectory
             projects={projects}
             activeProjectId={activeProject?.id ?? ""}
-            favoriteProjectIds={favoriteProjectIds}
             canManageProjects={currentUser.canPublish}
-            onToggleFavorite={toggleFavorite}
             onOpenPublish={() => setPublishOpen(true)}
             onEditProject={openEditProject}
             onToggleArchive={(project) => void toggleProjectArchive(project)}
@@ -1856,6 +1955,7 @@ export function RequirementWorkspace({
                   </button>
                 </div>
                 <div className="header-actions">
+                  <button className={`icon-button${discussionsOpen ? " is-active" : ""}`} onClick={() => setDiscussionsOpen((open) => !open)} title={`需求讨论${openDiscussionCount ? `（待处理 ${openDiscussionCount}）` : ""}`} aria-label="打开需求讨论"><Icon name="messages" />{openDiscussionCount ? <b className="prd-comment-count">{openDiscussionCount}</b> : null}</button>
                   {tab === "demo" ? <button className={`icon-button${htmlCommentMode ? " is-active" : ""}`} onClick={() => { const next = !htmlCommentMode; setHtmlCommentMode(next); if (next) showCommentModeNotice(); }} title={`Demo 评论${htmlThreadCount ? `（${htmlThreadCount}）` : ""}`} aria-label="进入 Demo 评论态"><Icon name="message" />{htmlThreadCount ? <b className="prd-comment-count">{htmlThreadCount}</b> : null}</button> : null}
                   {tab === "prd" || tab === "split" ? <button className={`icon-button${prdCommentMode ? " is-active" : ""}`} onClick={() => { const next = !prdCommentMode; setPrdCommentMode(next); if (next) showCommentModeNotice(); }} title={`PRD 评论${prdThreadCount ? `（${prdThreadCount}）` : ""}`} aria-label="进入 PRD 评论态"><Icon name="message" />{prdThreadCount ? <b className="prd-comment-count">{prdThreadCount}</b> : null}</button> : null}
                   <button
@@ -2137,6 +2237,17 @@ export function RequirementWorkspace({
               onReply={replyPrdComment}
                         onUpdate={updateRequirementComment}
                         onDelete={deleteRequirementComment}
+            /> : null}
+            {discussionsOpen ? <RequirementDiscussionPanel
+              discussions={discussions}
+              actor={{ id: currentUser.openId, name: currentUser.name, initial: currentUser.initial }}
+              canProcess={canProcessDiscussions}
+              onClose={() => setDiscussionsOpen(false)}
+              onCreate={createRequirementDiscussion}
+              onReply={replyRequirementDiscussion}
+              onProcess={processRequirementDiscussion}
+              onUpdate={updateRequirementDiscussion}
+              onDelete={deleteRequirementDiscussion}
             /> : null}
           </>
         )}

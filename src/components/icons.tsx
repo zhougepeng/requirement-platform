@@ -1,6 +1,6 @@
 import type { ReactNode, SVGProps } from "react";
 
-type IconName = "book" | "folder" | "search" | "chevron" | "link" | "external" | "desktop" | "mobile" | "send" | "plus" | "arrow" | "message" | "check" | "file" | "star" | "settings" | "trash" | "close" | "users" | "refresh" | "edit";
+type IconName = "book" | "folder" | "search" | "chevron" | "link" | "external" | "desktop" | "mobile" | "send" | "plus" | "arrow" | "message" | "messages" | "check" | "file" | "star" | "settings" | "trash" | "close" | "users" | "refresh" | "edit";
 
 const paths: Record<IconName, ReactNode> = {
   book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M4 5.5v16"/><path d="M8 7h8M8 11h6"/></>,
@@ -15,6 +15,7 @@ const paths: Record<IconName, ReactNode> = {
   plus: <path d="M12 5v14M5 12h14"/>,
   arrow: <><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></>,
   message: <path d="M21 11.5a8.38 8.38 0 0 1-9 8.46 8.5 8.5 0 0 1-3.8-.9L3 21l1.7-4.2A8.5 8.5 0 1 1 21 11.5Z"/>,
+  messages: <><path d="M8.5 17.5a6.5 6.5 0 1 1 5.1-2.47L16 18l-3.4-.85a6.5 6.5 0 0 1-4.1.35Z"/><path d="M15.5 8.5a6.5 6.5 0 0 1 5.1 10.53L22 21l-3.4-.85a6.5 6.5 0 0 1-4.1.35"/></>,
   check: <path d="m5 12 4 4L19 6"/>,
   file: <><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></>,
   star: <path d="m12 3 2.78 5.63 6.22.9-4.5 4.39 1.06 6.2L12 17.2l-5.56 2.92 1.06-6.2L3 9.53l6.22-.9z"/>,

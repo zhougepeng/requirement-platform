@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion } from "@/lib/types";
+import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -302,6 +302,10 @@ async function ensureStore(): Promise<RequirementStore> {
   }
   if (!Array.isArray(store.gaps)) {
     store.gaps = [];
+    migrated = true;
+  }
+  if (!Array.isArray(store.discussions)) {
+    store.discussions = [];
     migrated = true;
   }
   if (!Array.isArray(store.testCases)) {
@@ -1126,6 +1130,101 @@ export async function deletePrdComment(commentId: string, actor?: { id: string; 
     comment.deletedBy = actor?.id || "local-dev-user";
     comment.content = "";
     return clone(comment);
+  });
+}
+
+export type ProcessRequirementDiscussionInput = {
+  resolution: "resolved" | "rejected" | "related_requirement";
+  note: string;
+  relatedRequirementCode?: string;
+};
+
+function discussionOwner(discussion: RequirementDiscussion, actor?: { id: string; name: string }) {
+  const actorId = actor?.id || "local-dev-user";
+  return discussion.authorId ? discussion.authorId === actorId : discussion.author === (actor?.name || "本地开发身份");
+}
+
+function discussionHandler(requirement: Requirement, actor?: { id: string; name: string }, canManage = false) {
+  if (canManage) return true;
+  const actorId = actor?.id || "local-dev-user";
+  return Boolean((requirement.ownerId && requirement.ownerId === actorId) || (requirement.owner && requirement.owner === (actor?.name || "本地开发身份")));
+}
+
+export async function listRequirementDiscussions(requirementCode: string) {
+  const store = await ensureStore();
+  if (!store.requirements.some((item) => item.code === requirementCode)) throw new Error("需求不存在。");
+  return clone((store.discussions ?? []).filter((item) => item.requirementCode === requirementCode).toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)));
+}
+
+export async function addRequirementDiscussion(requirementCode: string, content: string, actor?: { id: string; name: string }) {
+  const value = content.trim();
+  if (!value || value.length > 2000) throw new Error("讨论内容不能为空且不能超过 2000 字。");
+  return mutate((store) => {
+    if (!store.requirements.some((item) => item.code === requirementCode)) throw new Error("需求不存在。");
+    const actorId = actor?.id || "local-dev-user";
+    const discussion: RequirementDiscussion = { id: randomUUID(), requirementCode, authorId: actorId, author: actor?.name || "本地开发身份", initials: (actor?.name || "本").slice(0, 1), tone: commentTone(actorId), content: value, createdAt: now(), status: "open" };
+    store.discussions ??= [];
+    store.discussions.push(discussion);
+    return clone(discussion);
+  });
+}
+
+export async function replyRequirementDiscussion(requirementCode: string, parentId: string, content: string, actor?: { id: string; name: string }) {
+  const value = content.trim();
+  if (!value || value.length > 2000) throw new Error("回复内容不能为空且不能超过 2000 字。");
+  return mutate((store) => {
+    const parent = (store.discussions ?? []).find((item) => item.id === parentId && !item.parentId && item.requirementCode === requirementCode);
+    if (!parent) throw new Error("讨论不存在或不属于当前需求。");
+    const actorId = actor?.id || "local-dev-user";
+    const reply: RequirementDiscussion = { id: randomUUID(), requirementCode, parentId, authorId: actorId, author: actor?.name || "本地开发身份", initials: (actor?.name || "本").slice(0, 1), tone: commentTone(actorId), content: value, createdAt: now() };
+    store.discussions ??= [];
+    store.discussions.push(reply);
+    return clone(reply);
+  });
+}
+
+export async function updateRequirementDiscussion(discussionId: string, content: string, actor?: { id: string; name: string }) {
+  const value = content.trim();
+  if (!value || value.length > 2000) throw new Error("讨论内容不能为空且不能超过 2000 字。");
+  return mutate((store) => {
+    const discussion = (store.discussions ?? []).find((item) => item.id === discussionId);
+    if (!discussion) throw new Error("讨论不存在。");
+    if (discussion.deletedAt) throw new Error("已删除的讨论不能修改。");
+    if (!discussionOwner(discussion, actor)) throw new Error("只能修改自己的讨论或回复。");
+    discussion.content = value;
+    discussion.updatedAt = now();
+    return clone(discussion);
+  });
+}
+
+export async function deleteRequirementDiscussion(discussionId: string, actor?: { id: string; name: string }) {
+  return mutate((store) => {
+    const discussion = (store.discussions ?? []).find((item) => item.id === discussionId);
+    if (!discussion) throw new Error("讨论不存在。");
+    if (discussion.deletedAt) return clone(discussion);
+    if (!discussionOwner(discussion, actor)) throw new Error("只能删除自己的讨论或回复。");
+    discussion.deletedAt = now();
+    discussion.content = "";
+    return clone(discussion);
+  });
+}
+
+export async function processRequirementDiscussion(requirementCode: string, discussionId: string, input: ProcessRequirementDiscussionInput, actor?: { id: string; name: string }, canManage = false) {
+  const note = input.note.trim();
+  if (!note || note.length > 2000) throw new Error("处理说明不能为空且不能超过 2000 字。");
+  if (input.resolution === "related_requirement" && !input.relatedRequirementCode?.trim()) throw new Error("转为其他需求时必须填写关联需求编号。");
+  return mutate((store) => {
+    const requirement = store.requirements.find((item) => item.code === requirementCode);
+    const discussion = (store.discussions ?? []).find((item) => item.id === discussionId && !item.parentId && item.requirementCode === requirementCode);
+    if (!requirement || !discussion) throw new Error("讨论不存在或不属于当前需求。");
+    if (!discussionHandler(requirement, actor, canManage)) throw new Error("只有需求负责人、发布人或管理员可以处理讨论。");
+    discussion.status = "closed";
+    discussion.resolution = input.resolution;
+    discussion.resolutionNote = note;
+    discussion.relatedRequirementCode = input.resolution === "related_requirement" ? input.relatedRequirementCode?.trim() : undefined;
+    discussion.handledAt = now();
+    discussion.handledBy = actor?.name || "本地开发身份";
+    return clone(discussion);
   });
 }
 
