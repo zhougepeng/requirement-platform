@@ -1,32 +1,27 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import mermaid from "mermaid";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PrdCommentAnchor, RequirementComment } from "@/lib/types";
 
-let mermaidLoader: Promise<typeof import("mermaid")> | null = null;
 let mermaidSequence = 0;
+const fallbackFlowchartSources = new Set<string>();
 
-function loadMermaid() {
-  mermaidLoader ??= import("mermaid").then((module) => {
-    module.default.initialize({
-      startOnLoad: false,
-      securityLevel: "strict",
-      theme: "base",
-      themeVariables: {
-        primaryColor: "#eff6ff",
-        primaryBorderColor: "#2563eb",
-        primaryTextColor: "#172033",
-        lineColor: "#64748b",
-        secondaryColor: "#f8fafc",
-        tertiaryColor: "#ffffff",
-      },
-    });
-    return module;
-  });
-  return mermaidLoader;
-}
+mermaid.initialize({
+  startOnLoad: false,
+  securityLevel: "strict",
+  theme: "base",
+  themeVariables: {
+    primaryColor: "#eff6ff",
+    primaryBorderColor: "#2563eb",
+    primaryTextColor: "#172033",
+    lineColor: "#64748b",
+    secondaryColor: "#f8fafc",
+    tertiaryColor: "#ffffff",
+  },
+});
 
 function normalizeMermaidSource(source: string) {
   return source.replace(/\r\n/g, "\n").replace(
@@ -35,28 +30,122 @@ function normalizeMermaidSource(source: string) {
   );
 }
 
+function escapeSvgText(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+}
+
+function renderFlowchartFallback(source: string) {
+  type Node = { id: string; label: string; decision: boolean };
+  type Edge = { from: string; to: string; label: string; dashed: boolean };
+  const nodes = new Map<string, Node>();
+  const edges: Edge[] = [];
+  const ensureNode = (id: string, label = id, decision = false) => {
+    const current = nodes.get(id);
+    if (!current || current.label === current.id) nodes.set(id, { id, label, decision });
+  };
+
+  for (const line of source.split("\n")) {
+    for (const match of line.matchAll(/([A-Za-z][\w-]*)\s*(?:\[([^\]]+)\]|\{([^}]+)\})/g)) {
+      ensureNode(match[1], match[2] || match[3] || match[1], Boolean(match[3]));
+    }
+    const arrow = line.match(/^\s*([A-Za-z][\w-]*)[^\r\n]*?(-->|-\.([^.]*)\.->)\s*(?:\|([^|]+)\|\s*)?([A-Za-z][\w-]*)/);
+    if (!arrow) continue;
+    const from = arrow[1];
+    const to = arrow[5];
+    const label = (arrow[4] || arrow[3] || "").trim();
+    ensureNode(from);
+    ensureNode(to);
+    if (!edges.some((edge) => edge.from === from && edge.to === to && edge.label === label)) edges.push({ from, to, label, dashed: arrow[2].startsWith("-.") });
+  }
+
+  if (!nodes.size) return "";
+  const levels = new Map<string, number>([...nodes.keys()].map((id) => [id, 0]));
+  for (let round = 0; round < nodes.size; round += 1) {
+    let changed = false;
+    for (const edge of edges) {
+      const next = Math.min(nodes.size - 1, (levels.get(edge.from) || 0) + 1);
+      if (next > (levels.get(edge.to) || 0)) {
+        levels.set(edge.to, next);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  const groups = new Map<number, string[]>();
+  for (const id of nodes.keys()) {
+    const level = levels.get(id) || 0;
+    groups.set(level, [...(groups.get(level) || []), id]);
+  }
+  const maxItems = Math.max(...[...groups.values()].map((group) => group.length));
+  const width = Math.max(860, maxItems * 220 + 80);
+  const height = Math.max(220, groups.size * 126 + 64);
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const [level, ids] of groups) ids.forEach((id, index) => positions.set(id, { x: ((index + 1) * width) / (ids.length + 1), y: 54 + level * 126 }));
+  const nodeWidth = 174;
+  const nodeHeight = 48;
+  const edgeSvg = edges.map((edge) => {
+    const from = positions.get(edge.from);
+    const to = positions.get(edge.to);
+    if (!from || !to) return "";
+    const midY = Math.round((from.y + to.y) / 2);
+    const label = edge.label ? `<text x="${Math.round((from.x + to.x) / 2)}" y="${midY - 5}" text-anchor="middle" class="flowchart-fallback-label">${escapeSvgText(edge.label)}</text>` : "";
+    return `<path d="M ${from.x} ${from.y + nodeHeight / 2} V ${midY} H ${to.x} V ${to.y - nodeHeight / 2}" class="flowchart-fallback-edge${edge.dashed ? " is-dashed" : ""}" marker-end="url(#flowchart-arrow)"/>${label}`;
+  }).join("");
+  const nodeSvg = [...nodes.values()].map((node) => {
+    const point = positions.get(node.id);
+    if (!point) return "";
+    const text = escapeSvgText(node.label.length > 22 ? `${node.label.slice(0, 21)}…` : node.label);
+    return `<g><rect x="${point.x - nodeWidth / 2}" y="${point.y - nodeHeight / 2}" width="${nodeWidth}" height="${nodeHeight}" rx="${node.decision ? 24 : 8}" class="flowchart-fallback-node${node.decision ? " is-decision" : ""}"/><text x="${point.x}" y="${point.y + 5}" text-anchor="middle" class="flowchart-fallback-node-text">${text}</text></g>`;
+  }).join("");
+  return `<svg class="flowchart-fallback-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="业务流程图"><defs><marker id="flowchart-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#64748b"/></marker></defs>${edgeSvg}${nodeSvg}</svg>`;
+}
+
+function FlowchartFallback({ source }: { source: string }) {
+  const svg = renderFlowchartFallback(source);
+  if (!svg) return <div className="mermaid-diagram is-failed"><p>流程图语法无法渲染，保留原始内容供检查。</p><pre><code>{source}</code></pre></div>;
+  return <div className="mermaid-diagram flowchart-fallback" dangerouslySetInnerHTML={{ __html: svg }} />;
+}
+
 function MermaidDiagram({ source }: { source: string }) {
   const reactId = useId();
+  const isFlowchart = /^\s*flowchart\s+/m.test(source);
   const [svg, setSvg] = useState("");
   const [failed, setFailed] = useState(false);
+  const [showFallback, setShowFallback] = useState(() => isFlowchart || fallbackFlowchartSources.has(source));
 
   useEffect(() => {
+    if (isFlowchart) return;
     let active = true;
     const id = `requirement-mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}-${mermaidSequence++}`;
-    void loadMermaid()
-      .then(({ default: mermaid }) => mermaid.render(id, normalizeMermaidSource(source)))
+    const timeout = window.setTimeout(() => {
+      if (!active) return;
+      fallbackFlowchartSources.add(source);
+      setShowFallback(true);
+    }, 1800);
+    void mermaid
+      .render(id, normalizeMermaidSource(source))
       .then(({ svg: nextSvg }) => {
-        if (active) setSvg(nextSvg);
+        if (active) {
+          window.clearTimeout(timeout);
+          setSvg(nextSvg);
+          setShowFallback(false);
+        }
       })
       .catch(() => {
-        if (active) setFailed(true);
+        if (active) {
+          window.clearTimeout(timeout);
+          setFailed(true);
+        }
       });
     return () => {
       active = false;
+      window.clearTimeout(timeout);
     };
-  }, [reactId, source]);
+  }, [isFlowchart, reactId, source]);
 
   if (failed) return <div className="mermaid-diagram is-failed"><p>流程图语法无法渲染，保留原始内容供检查。</p><pre><code>{source}</code></pre></div>;
+  // Mermaid 11 的异步布局模块在当前 Next 开发环境中可能永远不返回；流程图直接使用本地 SVG 渲染，避免切换 PRD 后长期停在加载态。
+  if (showFallback || isFlowchart) return <FlowchartFallback source={source} />;
   if (!svg) return <div className="mermaid-diagram is-loading" aria-busy="true">正在渲染流程图…</div>;
   return <div className="mermaid-diagram" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
