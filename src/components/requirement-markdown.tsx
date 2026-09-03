@@ -78,7 +78,11 @@ function renderFlowchartFallback(source: string) {
   }
   const maxItems = Math.max(...[...groups.values()].map((group) => group.length));
   const width = Math.max(860, maxItems * 220 + 80);
-  const height = Math.max(220, groups.size * 126 + 64);
+  // Levels can have gaps when the source contains branches or a disconnected
+  // node. Base the canvas height on the deepest level rather than the number
+  // of populated groups so the last nodes and edges are never clipped.
+  const maxLevel = Math.max(...levels.values());
+  const height = Math.max(220, (maxLevel + 1) * 126 + 64);
   const positions = new Map<string, { x: number; y: number }>();
   for (const [level, ids] of groups) ids.forEach((id, index) => positions.set(id, { x: ((index + 1) * width) / (ids.length + 1), y: 54 + level * 126 }));
   const nodeWidth = 174;
