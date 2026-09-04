@@ -67,6 +67,39 @@ function demoEvidence(html: string) {
   return `CSS 样本：\n${bounded(styles || "未识别到 style 标签。", 4_000)}\n\nDOM 结构样本：\n${bounded(structure || "未识别到 HTML 标签。", 2_000)}`;
 }
 
+function inferDemoTokens(html: string): ProductSpec["tokens"] {
+  if (!html) return {};
+  const colors = Array.from(new Set(html.match(/#[0-9a-f]{3,8}\b|rgba?\([^)]{3,40}\)/gi) ?? [])).slice(0, 60);
+  const variables = Array.from(html.matchAll(/--([\w-]+)\s*:\s*([^;}{]+)/g), (match) => [match[1], match[2].trim()] as const).slice(0, 80);
+  const fontFamilies = Array.from(new Set(Array.from(html.matchAll(/font-family\s*:\s*([^;}{]+)/gi), (match) => match[1].trim()).filter(Boolean))).slice(0, 12);
+  const spacing = Array.from(new Set(Array.from(html.matchAll(/(?:padding|margin|gap)\s*:\s*([^;}{]+)/gi), (match) => match[1].trim()).filter(Boolean))).slice(0, 24);
+  return {
+    ...(colors.length || variables.length ? { color: { sourceColors: colors, cssVariables: Object.fromEntries(variables) } } : {}),
+    ...(fontFamilies.length ? { typography: { fontFamilies } } : {}),
+    ...(spacing.length ? { spacing: { sourceValues: spacing } } : {}),
+  };
+}
+
+function inferDemoComponents(html: string, requirementCode: string): ProductSpecComponent[] {
+  if (!html) return [];
+  const definitions: Array<[string, RegExp, string]> = [
+    ["Button", /<button\b|\bbutton\b|role\s*=\s*["']button["']/i, "页面操作、提交和导航操作"],
+    ["Input", /<input\b|<textarea\b|contenteditable\s*=\s*["']true["']/i, "文本、编号或多行内容输入"],
+    ["Select", /<select\b|role\s*=\s*["']combobox["']/i, "枚举项选择和筛选"],
+    ["Dialog", /<dialog\b|role\s*=\s*["']dialog["']|modal|modal-mask/i, "承载确认、导入或编辑流程的弹窗"],
+    ["Table", /<table\b|role\s*=\s*["']table["']/i, "结构化列表、明细和结果展示"],
+    ["Tabs", /\btablist\b|\btab\b|class\s*=\s*["'][^"']*\btab(?:s)?\b/i, "同一页面内的模块切换"],
+    ["Card", /class\s*=\s*["'][^"']*(?:card|panel|pane)[^"']*["']/i, "分组展示指标或业务内容"],
+  ];
+  return definitions.filter(([, pattern]) => pattern.test(html)).map(([name, , usage]) => ({
+    name,
+    usage,
+    states: ["default", "hover", "disabled"],
+    interaction: name === "Button" || name === "Tabs" ? ["点击后更新当前状态或内容"] : [],
+    sourceRequirementCodes: [requirementCode],
+  }));
+}
+
 function compactTestCases(testCases: Array<{ title: string; module: string; type: string; steps: unknown; expectedResults: unknown }>) {
   return testCases.slice(0, 16).map((item) => ({
     title: item.title,
@@ -153,12 +186,16 @@ function entries(value: unknown, requirementCode: string, productId: string, fal
   }).slice(0, 120);
 }
 
-function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode: string): ProductSpec {
+function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode: string, demoHtml = ""): ProductSpec {
   const source = record(value.spec) ?? value;
   const rules = record(source.rules);
   const prd = record(source.prd);
   const demo = record(source.demo);
   const tokens = record(source.tokens);
+  const inferredTokens = inferDemoTokens(demoHtml);
+  const inferredComponents = inferDemoComponents(demoHtml, requirementCode);
+  const parsedTokens = tokens && Object.keys(tokens).length ? tokens : inferredTokens;
+  const parsedComponents = components(source.components, requirementCode, inferredComponents.length ? inferredComponents : program.components);
   const parsedEntries = entries(source.entries, requirementCode, program.productId, program.entries ?? []);
   return {
     id: program.id,
@@ -173,8 +210,8 @@ function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode:
       structure: strings(prd?.structure).length ? strings(prd?.structure) : program.prd.structure,
       writingRules: strings(prd?.writingRules).length ? strings(prd?.writingRules) : program.prd.writingRules,
     },
-    tokens: tokens && Object.keys(tokens).length ? tokens : program.tokens,
-    components: components(source.components, requirementCode, program.components),
+    tokens: Object.keys(parsedTokens).length ? parsedTokens : program.tokens,
+    components: parsedComponents,
     demo: {
       layoutPrinciples: strings(demo?.layoutPrinciples).length ? strings(demo?.layoutPrinciples) : program.demo.layoutPrinciples,
       componentReuseRules: strings(demo?.componentReuseRules).length ? strings(demo?.componentReuseRules) : program.demo.componentReuseRules,
@@ -247,5 +284,5 @@ export async function extractProductSpecWithModel(requirementCode: string, produ
   } catch (error) {
     throw new ProductSpecModelError(error instanceof Error ? error.message : "AI 规范解析失败。", 422);
   }
-  return extractProductSpec(requirementCode, productId, normalizeSpec(parsed, context.programSpec, requirementCode));
+  return extractProductSpec(requirementCode, productId, normalizeSpec(parsed, context.programSpec, requirementCode, context.demoHtml));
 }
