@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
-import type { Product, ProductSpec, Project } from "@/lib/types";
+import type { Product, ProductSpec, ProductSpecSnapshot, Project } from "@/lib/types";
 
 type MaterialScope = "project" | "public";
 type MaterialOrigin = "manual" | "system_generated";
@@ -44,7 +44,14 @@ function DirectoryBranch({ directory, directories, target, canEdit, depth, onCho
   </>;
 }
 
-function ProductSpecView({ product, spec }: { product: Product; spec: ProductSpec | null }) {
+function ProductSpecView({ product, spec, snapshots = [], canEdit, onRestore }: { product: Product; spec: ProductSpec | null; snapshots?: ProductSpecSnapshot[]; canEdit?: boolean; onRestore?: (snapshot: ProductSpecSnapshot) => void }) {
+  const [history, setHistory] = useState<ProductSpecSnapshot[]>(snapshots);
+  useEffect(() => {
+    setHistory(snapshots);
+    if (snapshots.length || !product.id) return;
+    const endpoint = product.id === "global" ? "/api/v1/specs/global/versions" : `/api/v1/products/${encodeURIComponent(product.id)}/spec/versions`;
+    void fetch(endpoint, { headers: { "Content-Type": "application/json" } }).then((response) => response.ok ? response.json() as Promise<ApiResponse<ProductSpecSnapshot[]>> : null).then((body) => { if (body && "data" in body && body.data) setHistory(body.data); }).catch(() => undefined);
+  }, [product.id, snapshots]);
   if (!spec) return <div className="material-list-empty"><Icon name="file" /><p>正在读取产品规范…</p></div>;
   const list = (values: string[]) => values.length ? <ul>{values.map((value) => <li key={value}>{value}</li>)}</ul> : <p>暂未沉淀</p>;
   return <article className="material-preview material-product-spec-view">
@@ -54,7 +61,8 @@ function ProductSpecView({ product, spec }: { product: Product; spec: ProductSpe
     <section><h4>PRD 规范</h4><b>文档结构</b>{list(spec.prd.structure)}<b>写作规则</b>{list(spec.prd.writingRules)}</section>
     <section><h4>UI 样式</h4><pre>{Object.keys(spec.tokens).length ? JSON.stringify(spec.tokens, null, 2) : "暂未沉淀 Token"}</pre></section>
     <section><h4>组件与交互</h4>{spec.components.length ? <div className="material-product-components">{spec.components.map((component) => <article key={component.name}><b>{component.name}</b><p>{component.usage}</p>{component.avoid ? <small>不适用：{component.avoid}</small> : null}{component.interaction?.length ? <small>交互：{component.interaction.join("；")}</small> : null}</article>)}</div> : <p>暂未沉淀</p>}</section>
-    <section><h4>Demo 规范</h4><b>布局原则</b>{list(spec.demo.layoutPrinciples)}<b>组件复用</b>{list(spec.demo.componentReuseRules)}<b>交互要求</b>{list(spec.demo.interactionRequirements)}<b>开发约束</b>{list(spec.demo.constraints)}</section>
+     <section><h4>Demo 规范</h4><b>布局原则</b>{list(spec.demo.layoutPrinciples)}<b>组件复用</b>{list(spec.demo.componentReuseRules)}<b>交互要求</b>{list(spec.demo.interactionRequirements)}<b>开发约束</b>{list(spec.demo.constraints)}</section>
+     <section className="material-product-spec-history"><h4>历史版本</h4>{history.length ? history.map((snapshot) => <article key={snapshot.snapshotId}><div><b>V{snapshot.version}</b><small>{snapshot.createdAt.slice(0, 16).replace("T", " ")}{snapshot.createdBy ? ` · ${snapshot.createdBy}` : ""}</small></div>{canEdit && onRestore ? <button className="project-dialog-cancel" onClick={() => onRestore(snapshot)}>回滚为此版本</button> : null}</article>) : <p>暂无历史版本</p>}</section>
   </article>;
 }
 
@@ -63,6 +71,8 @@ export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; ca
   const [products, setProducts] = useState<Product[]>([]);
   const [productSpec, setProductSpec] = useState<ProductSpec | null>(null);
   const [globalSpec, setGlobalSpec] = useState<ProductSpec | null>(null);
+  const [productSpecSnapshots, setProductSpecSnapshots] = useState<ProductSpecSnapshot[]>([]);
+  const [globalSpecSnapshots, setGlobalSpecSnapshots] = useState<ProductSpecSnapshot[]>([]);
   const [target, setTarget] = useState<Target>(() => projects[0] ? { scope: "project", projectId: projects[0].id, label: projects[0].name } : { scope: "public", label: "公共资料" });
   const [materials, setMaterials] = useState<Material[]>([]);
   const [selected, setSelected] = useState<Material | null>(null);
@@ -100,11 +110,12 @@ export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; ca
   useEffect(() => {
     let active = true;
     if (target.scope === "product") {
-      void request<ProductSpec>(`/api/v1/products/${encodeURIComponent(target.productId || "")}/spec`).then((result) => { if (active) setProductSpec(result); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法读取产品规范。"); });
+      const id = encodeURIComponent(target.productId || "");
+      void Promise.all([request<ProductSpec>(`/api/v1/products/${id}/spec`), request<ProductSpecSnapshot[]>(`/api/v1/products/${id}/spec/versions`)]).then(([spec, snapshots]) => { if (active) { setProductSpec(spec); setProductSpecSnapshots(snapshots); } }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法读取产品规范。"); });
       return () => { active = false; };
     }
     if (target.scope === "global") {
-      void request<ProductSpec>("/api/v1/specs/global").then((result) => { if (active) setGlobalSpec(result); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法读取公共规范。"); });
+      void Promise.all([request<ProductSpec>("/api/v1/specs/global"), request<ProductSpecSnapshot[]>("/api/v1/specs/global/versions")]).then(([spec, snapshots]) => { if (active) { setGlobalSpec(spec); setGlobalSpecSnapshots(snapshots); } }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法读取公共规范。"); });
       return () => { active = false; };
     }
     const params = new URLSearchParams({ scope: target.scope });
@@ -119,7 +130,16 @@ export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; ca
   }, [target.scope, target.projectId, target.productId, target.directoryId]);
 
   function selectMaterial(next: Material | null) { setSelected(next); setEditing(false); setUploadMenuOpen(false); setTitle(next?.title ?? ""); setContent(next?.content ?? ""); }
-  function choose(next: Target) { setError(""); setEditing(false); setSelected(null); setUploadMenuOpen(false); if (next.scope === "product") setProductSpec(null); if (next.scope === "global") setGlobalSpec(null); setTarget(next); }
+  function choose(next: Target) { setError(""); setEditing(false); setSelected(null); setUploadMenuOpen(false); if (next.scope === "product") { setProductSpec(null); setProductSpecSnapshots([]); } if (next.scope === "global") { setGlobalSpec(null); setGlobalSpecSnapshots([]); } setTarget(next); }
+  async function restoreSpec(snapshot: ProductSpecSnapshot) {
+    if (!canEdit || !window.confirm(`确认回滚到 V${snapshot.version}？当前规范会自动保留为一个新快照。`)) return;
+    try {
+      const endpoint = target.scope === "global" ? "/api/v1/specs/global/versions" : `/api/v1/products/${encodeURIComponent(target.productId || "")}/spec/versions`;
+      const restored = await request<ProductSpec>(endpoint, { method: "POST", body: JSON.stringify({ snapshotId: snapshot.snapshotId }) });
+      if (target.scope === "global") { setGlobalSpec(restored); setGlobalSpecSnapshots(await request<ProductSpecSnapshot[]>("/api/v1/specs/global/versions")); }
+      else { setProductSpec(restored); setProductSpecSnapshots(await request<ProductSpecSnapshot[]>(`/api/v1/products/${encodeURIComponent(target.productId || "")}/spec/versions`)); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "回滚规范失败。"); }
+  }
   function startNew() { setSelected(null); setTitle(""); setContent(""); setUploadMenuOpen(false); setEditing(true); }
   function startEdit() { if (selected) { setTitle(selected.title); setContent(selected.content); setEditing(true); } }
 
@@ -200,7 +220,7 @@ export function MaterialLibrary({ projects, canEdit }: { projects: Project[]; ca
       </aside>
       <section className="material-content">
          <header className="material-content-head"><div>{showDetail ? <button className="material-back-button" onClick={() => selectMaterial(null)}><Icon name="arrow" /> 资料列表</button> : <small>{target.scope === "project" ? "项目资料" : target.scope === "product" ? "产品规范" : target.scope === "global" ? "公共规范" : "公共资料"}</small>}<h2>{showDetail && selected ? selected.title : target.label}</h2></div>{canEdit && target.scope !== "product" && target.scope !== "global" ? <div className="material-actions"><input ref={fileInput} type="file" accept=".md,.txt,text/markdown,text/plain" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file); event.target.value = ""; }} /><button className="publish-button" onClick={() => setUploadMenuOpen((current) => !current)}><Icon name="plus" /> 上传新资料</button>{uploadMenuOpen ? <div className="material-upload-menu" role="menu"><button role="menuitem" onClick={() => fileInput.current?.click()}><Icon name="file" /> 选择 .md / .txt 文件</button><button role="menuitem" onClick={startNew}><Icon name="edit" /> 直接粘贴文本</button></div> : null}</div> : null}</header>
-         {target.scope === "product" ? <ProductSpecView product={products.find((product) => product.id === target.productId) ?? { id: target.productId || "", name: target.label, createdAt: "", updatedAt: "" }} spec={productSpec} /> : target.scope === "global" ? <ProductSpecView product={{ id: "global", name: "公共规范", description: "所有产品共享的生成基线", createdAt: "", updatedAt: "" }} spec={globalSpec} /> : showDetail ? <article className="material-preview material-detail-view">{editing ? <><label>标题<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="资料标题" maxLength={120} /></label><label>内容<textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="可直接粘贴 Markdown 或文本内容" maxLength={400000} /></label><footer><button className="project-dialog-cancel" onClick={() => { setEditing(false); setTitle(selected?.title ?? ""); setContent(selected?.content ?? ""); }}>取消</button><button className="publish-button" onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存"}</button></footer></> : selected ? <><header><div><h3>{selected.title}</h3>{selected.origin === "system_generated" ? <small>系统根据已上线需求自动整理{selected.sourceRequirementCodes.length ? ` · 来源 ${selected.sourceRequirementCodes.join("、")}` : ""}</small> : <small>{selected.fileName ?? "人工维护"}</small>}</div>{canEdit ? <div>{selected.origin === "manual" ? <button className="icon-button" onClick={() => void move()} title="移动资料" aria-label="移动资料"><Icon name="folder" /></button> : null}<button className="icon-button" onClick={startEdit} title="编辑资料" aria-label="编辑资料"><Icon name="edit" /></button><button className="icon-button material-delete" onClick={() => void remove()} title="删除资料" aria-label="删除资料"><Icon name="trash" /></button></div> : null}</header><pre>{selected.content}</pre></> : null}</article> : <div className="material-list material-list-full"><div className="material-list-head"><span>名称</span><span>更新时间</span></div>{materials.length ? materials.map((item) => <button key={item.id} onClick={() => selectMaterial(item)}><span><b>{item.title}</b>{item.origin === "system_generated" ? <em>系统整理</em> : null}</span><small>{formatTime(item.updatedAt)}</small></button> ) : <div className="material-list-empty"><Icon name="file" /><p>当前目录还没有资料</p>{canEdit ? <button className="publish-button" onClick={() => setUploadMenuOpen(true)}><Icon name="plus" /> 上传新资料</button> : null}</div>}</div>}
+          {target.scope === "product" ? <ProductSpecView product={products.find((product) => product.id === target.productId) ?? { id: target.productId || "", name: target.label, createdAt: "", updatedAt: "" }} spec={productSpec} snapshots={productSpecSnapshots} canEdit={canEdit} onRestore={(snapshot) => void restoreSpec(snapshot)} /> : target.scope === "global" ? <ProductSpecView product={{ id: "global", name: "公共规范", description: "所有产品共享的生成基线", createdAt: "", updatedAt: "" }} spec={globalSpec} snapshots={globalSpecSnapshots} canEdit={canEdit} onRestore={(snapshot) => void restoreSpec(snapshot)} /> : showDetail ? <article className="material-preview material-detail-view">{editing ? <><label>标题<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="资料标题" maxLength={120} /></label><label>内容<textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="可直接粘贴 Markdown 或文本内容" maxLength={400000} /></label><footer><button className="project-dialog-cancel" onClick={() => { setEditing(false); setTitle(selected?.title ?? ""); setContent(selected?.content ?? ""); }}>取消</button><button className="publish-button" onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存"}</button></footer></> : selected ? <><header><div><h3>{selected.title}</h3>{selected.origin === "system_generated" ? <small>系统根据已上线需求自动整理{selected.sourceRequirementCodes.length ? ` · 来源 ${selected.sourceRequirementCodes.join("、")}` : ""}</small> : <small>{selected.fileName ?? "人工维护"}</small>}</div>{canEdit ? <div>{selected.origin === "manual" ? <button className="icon-button" onClick={() => void move()} title="移动资料" aria-label="移动资料"><Icon name="folder" /></button> : null}<button className="icon-button" onClick={startEdit} title="编辑资料" aria-label="编辑资料"><Icon name="edit" /></button><button className="icon-button material-delete" onClick={() => void remove()} title="删除资料" aria-label="删除资料"><Icon name="trash" /></button></div> : null}</header><pre>{selected.content}</pre></> : null}</article> : <div className="material-list material-list-full"><div className="material-list-head"><span>名称</span><span>更新时间</span></div>{materials.length ? materials.map((item) => <button key={item.id} onClick={() => selectMaterial(item)}><span><b>{item.title}</b>{item.origin === "system_generated" ? <em>系统整理</em> : null}</span><small>{formatTime(item.updatedAt)}</small></button> ) : <div className="material-list-empty"><Icon name="file" /><p>当前目录还没有资料</p>{canEdit ? <button className="publish-button" onClick={() => setUploadMenuOpen(true)}><Icon name="plus" /> 上传新资料</button> : null}</div>}</div>}
       </section>
     </div>
     {directoryDraft ? <div className="material-directory-dialog-backdrop" role="presentation"><form className="material-directory-dialog" onSubmit={(event) => { event.preventDefault(); void createDirectory(); }}><header><div><h3>新建子目录</h3><p>将在“{directoryDraft.label}”下创建。</p></div><button type="button" className="icon-button" onClick={() => setDirectoryDraft(null)} title="关闭" aria-label="关闭"><Icon name="close" /></button></header><label>目录名称<input autoFocus value={directoryName} onChange={(event) => setDirectoryName(event.target.value)} placeholder="例如：交互规范" maxLength={120} /></label><footer><button type="button" className="project-dialog-cancel" onClick={() => setDirectoryDraft(null)}>取消</button><button className="publish-button" disabled={!directoryName.trim() || creatingDirectory}>{creatingDirectory ? "创建中…" : "创建"}</button></footer></form></div> : null}
