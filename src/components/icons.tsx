@@ -1,6 +1,6 @@
 import type { ReactNode, SVGProps } from "react";
 
-type IconName = "book" | "folder" | "search" | "chevron" | "link" | "external" | "desktop" | "mobile" | "send" | "plus" | "arrow" | "message" | "messages" | "check" | "file" | "star" | "settings" | "trash" | "close" | "users" | "refresh" | "edit";
+type IconName = "book" | "folder" | "search" | "chevron" | "link" | "external" | "desktop" | "mobile" | "send" | "plus" | "arrow" | "message" | "messages" | "check" | "file" | "star" | "settings" | "trash" | "close" | "users" | "refresh" | "edit" | "download" | "sparkles";
 
 const paths: Record<IconName, ReactNode> = {
   book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M4 5.5v16"/><path d="M8 7h8M8 11h6"/></>,
@@ -25,6 +25,8 @@ const paths: Record<IconName, ReactNode> = {
   trash: <><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/></>,
   close: <path d="m6 6 12 12M18 6 6 18"/>,
   edit: <><path d="m4 20 4.5-1 10.9-10.9a2.12 2.12 0 0 0-3-3L6.5 16z"/><path d="m14.5 6.5 3 3"/></>,
+  download: <><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></>,
+  sparkles: <><path d="m12 3 1.2 4.8L18 9l-4.8 1.2L12 15l-1.2-4.8L6 9l4.8-1.2Z"/><path d="m19 14 .6 2.4L22 17l-2.4.6L19 20l-.6-2.4L16 17l2.4-.6Z"/><path d="m5 15 .5 2L7 17.5 5.5 18 5 20l-.5-2-1.5-.5 1.5-.5Z"/></>,
 };
 
 export function Icon({ name, className, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {

@@ -8,5 +8,8 @@ export function createInitialStore(): RequirementStore {
     versions: [],
     comments: [],
     artifacts: [],
+    products: [],
+    projectProducts: [],
+    productSpecs: [],
   };
 }

@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
+import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -316,6 +316,10 @@ async function ensureStore(): Promise<RequirementStore> {
     store.timelineEvents = [];
     migrated = true;
   }
+  if (!Array.isArray(store.products)) { store.products = []; migrated = true; }
+  if (!Array.isArray(store.projectProducts)) { store.projectProducts = []; migrated = true; }
+  if (!Array.isArray(store.productSpecs)) { store.productSpecs = []; migrated = true; }
+  if (!Array.isArray(store.productSpecPendingExtractions)) { store.productSpecPendingExtractions = []; migrated = true; }
   for (const requirement of store.requirements) {
     const project = store.projects.find((item) => item.id === requirement.projectId);
     if (!project) continue;
@@ -449,6 +453,204 @@ export async function getProject(projectId: string) {
   const project = store.projects.find((item) => item.id === projectId);
   if (!project) throw new Error("项目不存在。");
   return clone(project);
+}
+
+export type CreateProductInput = { name: string; description?: string };
+
+export async function listProducts(query = "") {
+  const store = await ensureStore();
+  const normalized = query.trim().toLowerCase();
+  return clone((store.products ?? []).filter((product) => !normalized || `${product.name} ${product.description ?? ""}`.toLowerCase().includes(normalized)).toSorted((a, b) => a.name.localeCompare(b.name)));
+}
+
+export async function getProduct(productId: string) {
+  const store = await ensureStore();
+  const product = (store.products ?? []).find((item) => item.id === productId);
+  if (!product) throw new Error("产品不存在。");
+  return clone(product);
+}
+
+export async function createProduct(input: CreateProductInput) {
+  const name = input.name.trim();
+  const description = (input.description ?? "").trim();
+  if (!name || name.length > 120) throw new Error("产品名称不能为空且不能超过 120 字。");
+  if (description.length > 500) throw new Error("产品说明不能超过 500 字。");
+  return mutate((store) => {
+    if ((store.products ?? []).some((item) => item.name.toLowerCase() === name.toLowerCase())) throw new Error("产品名称已存在。");
+    const timestamp = now();
+    const product: Product = { id: `product_${randomUUID().replaceAll("-", "")}`, name, description, createdAt: timestamp, updatedAt: timestamp };
+    store.products ??= []; store.projectProducts ??= []; store.productSpecs ??= [];
+    store.products.push(product);
+    return clone(product);
+  });
+}
+
+export async function listProjectProducts(projectId: string) {
+  const store = await ensureStore();
+  if (!store.projects.some((item) => item.id === projectId)) throw new Error("项目不存在。");
+  const ids = new Set((store.projectProducts ?? []).filter((item) => item.projectId === projectId).map((item) => item.productId));
+  return clone((store.products ?? []).filter((item) => ids.has(item.id)).toSorted((a, b) => a.name.localeCompare(b.name)));
+}
+
+export async function linkProjectProduct(projectId: string, productId: string) {
+  return mutate((store) => {
+    if (!store.projects.some((item) => item.id === projectId)) throw new Error("项目不存在。");
+    if (!(store.products ?? []).some((item) => item.id === productId)) throw new Error("产品不存在。");
+    store.projectProducts ??= [];
+    if (!store.projectProducts.some((item) => item.projectId === projectId && item.productId === productId)) store.projectProducts.push({ projectId, productId, createdAt: now() });
+    return clone(store.projectProducts.find((item) => item.projectId === projectId && item.productId === productId)!);
+  });
+}
+
+export async function setRequirementProduct(requirementCode: string, productId: string) {
+  return mutate((store) => {
+    const requirement = store.requirements.find((item) => item.code === requirementCode);
+    if (!requirement) throw new Error("需求不存在。");
+    if (!(store.products ?? []).some((item) => item.id === productId)) throw new Error("产品不存在。");
+    requirement.productId = productId;
+    requirement.updatedAt = now();
+    return clone(requirement);
+  });
+}
+
+function emptyProductSpec(productId: string): ProductSpec {
+  return { id: `spec_${productId}`, productId, version: 0, rules: { terminology: [], businessConstraints: [], copywriting: [] }, prd: { structure: [], writingRules: [] }, tokens: {}, components: [], demo: { layoutPrinciples: [], componentReuseRules: [], interactionRequirements: [], constraints: [] }, updatedAt: now() };
+}
+
+export async function getProductSpec(productId: string) {
+  await getProduct(productId);
+  const store = await ensureStore();
+  return clone((store.productSpecs ?? []).find((item) => item.productId === productId) ?? emptyProductSpec(productId));
+}
+
+export async function getProductGenerationContext(productId: string) {
+  const spec = await getProductSpec(productId);
+  return clone({ productId, rules: spec.rules, prd: spec.prd, tokens: spec.tokens, components: spec.components, demo: spec.demo });
+}
+
+function unique(values: string[]) { return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).slice(0, 80); }
+
+async function analyseProductSpec(requirementCode: string, productId: string): Promise<ProductSpec> {
+  const store = await ensureStore();
+  const requirement = store.requirements.find((item) => item.code === requirementCode);
+  if (!requirement) throw new Error("需求不存在。");
+  const version = store.versions.find((item) => item.id === requirement.currentVersionId);
+  if (!version) throw new Error("需求版本不存在。");
+  const prd = version.prd || "";
+  const headings = unique(Array.from(prd.matchAll(/^#{1,4}\s+(.+)$/gm), (match) => match[1]));
+  const terminology = unique(Array.from(prd.matchAll(/[“「『]([^”」』]{2,24})[”」』]/g), (match) => match[1]));
+  const constraints = unique(prd.split(/\n+/).filter((line) => /(必须|不得|不能|仅允许|需要支持|约束)/.test(line)).map((line) => line.replace(/^[-*]\s*/, "").trim()));
+  const colors = unique(Array.from(prd.matchAll(/#[0-9a-fA-F]{3,8}\b/g), (match) => match[0]));
+  const demoSummary = version.demoEntryUrl ? await analyseDemo(version.demoEntryUrl) : { summary: "", demoIds: [], supportsAutomation: false };
+  const componentNames = unique(["Button", "Input", "Select", "Dialog", "Table", "Tabs", "Card"].filter((name) => new RegExp(name, "i").test(demoSummary.summary) || new RegExp(name, "i").test(prd)));
+  const components = componentNames.map((name) => ({ name, usage: `复用 ${name} 组件完成相同交互场景。`, states: ["default", "hover", "disabled"], interaction: [], sourceRequirementCodes: [requirementCode] }));
+  return { id: `spec_${productId}`, productId, version: 0, rules: { terminology, businessConstraints: constraints, copywriting: [] }, prd: { structure: headings, writingRules: ["先说明目标与范围，再描述流程、规则和验收标准。"] }, tokens: colors.length ? { color: { sourceColors: colors } } : {}, components, demo: { layoutPrinciples: ["保持与现有产品布局一致。"], componentReuseRules: ["优先复用已有组件，不重复创建近似组件。"], interactionRequirements: [], constraints: ["生成 Demo 必须覆盖正常、异常和空状态。"] }, updatedAt: now() };
+}
+
+function compareProductSpec(existing: ProductSpec, incoming: ProductSpec): ProductSpecChange[] {
+  const changes: ProductSpecChange[] = [];
+  const compareList = (path: string, oldValues: string[], newValues: string[]) => {
+    for (const value of newValues) if (!oldValues.includes(value)) changes.push({ category: oldValues.length ? "supplemented" : "added", path, summary: value, existing: oldValues, incoming: newValues });
+  };
+  compareList("rules.terminology", existing.rules.terminology, incoming.rules.terminology);
+  compareList("rules.businessConstraints", existing.rules.businessConstraints, incoming.rules.businessConstraints);
+  compareList("prd.structure", existing.prd.structure, incoming.prd.structure);
+  compareList("demo.constraints", existing.demo.constraints, incoming.demo.constraints);
+  if (existing.tokens.color && incoming.tokens.color && JSON.stringify(existing.tokens.color) !== JSON.stringify(incoming.tokens.color)) changes.push({ category: "conflict", path: "tokens.color", summary: "检测到颜色 Token 与现有规范不同。", existing: existing.tokens.color, incoming: incoming.tokens.color });
+  for (const component of incoming.components) if (!existing.components.some((item) => item.name === component.name)) changes.push({ category: "added", path: `components.${component.name}`, summary: `新增可复用组件：${component.name}`, incoming: component });
+  return changes;
+}
+
+export async function extractProductSpec(requirementCode: string, productId: string, analysedDraftSpec?: ProductSpec) {
+  const store = await ensureStore();
+  const requirement = store.requirements.find((item) => item.code === requirementCode);
+  if (!requirement) throw new Error("需求不存在。");
+  await getProduct(productId);
+  const existing = (store.productSpecs ?? []).find((item) => item.productId === productId) ?? emptyProductSpec(productId);
+  const draftSpec = analysedDraftSpec ?? await analyseProductSpec(requirementCode, productId);
+  const changes = compareProductSpec(existing, draftSpec);
+  return clone({ product: (store.products ?? []).find((item) => item.id === productId), requirement, changes, draftSpec, summary: { total: changes.length, added: changes.filter((item) => item.category === "added").length, supplemented: changes.filter((item) => item.category === "supplemented").length, conflicts: changes.filter((item) => item.category === "conflict").length } });
+}
+
+export async function getProductSpecExtractionContext(requirementCode: string, productId: string) {
+  const store = await ensureStore();
+  const requirement = store.requirements.find((item) => item.code === requirementCode);
+  const version = requirement ? store.versions.find((item) => item.id === requirement.currentVersionId) : undefined;
+  if (!requirement || !version) throw new Error("需求或当前版本不存在。");
+  await getProduct(productId);
+  const demoSummary = version.demoEntryUrl ? await analyseDemo(version.demoEntryUrl) : { summary: "当前版本没有 Demo。", demoIds: [], supportsAutomation: false };
+  const demoHtml = version.demoEntryUrl ? await readDemoSource(version.demoEntryUrl) : "";
+  const testCases = (store.testCases ?? [])
+    .filter((item) => item.requirementCode === requirementCode && item.versionNo === version.number)
+    .slice(0, 40)
+    .map((item) => ({ title: item.title, module: item.module, type: item.type, steps: item.steps, expectedResults: item.expectedResults }));
+  return clone({
+    requirement: { code: requirement.code, title: requirement.title, status: requirement.status },
+    version: { number: version.number, changeSummary: version.changeSummary },
+    prd: version.prd.slice(0, 60_000),
+    demoHtml,
+    demoSummary,
+    testCases,
+    programSpec: await analyseProductSpec(requirementCode, productId),
+  });
+}
+
+export async function savePendingProductSpecExtraction(input: Omit<ProductSpecPendingExtraction, "id" | "createdAt" | "status">) {
+  return mutate((store) => {
+    const pending: ProductSpecPendingExtraction = { ...input, id: `product_spec_pending_${randomUUID().replaceAll("-", "")}`, createdAt: now(), status: "pending_review" };
+    store.productSpecPendingExtractions ??= [];
+    store.productSpecPendingExtractions = store.productSpecPendingExtractions.filter((item) => !(item.requirementCode === input.requirementCode && item.productId === input.productId));
+    store.productSpecPendingExtractions.push(pending);
+    return clone(pending);
+  });
+}
+
+export async function mergeProductSpec(productId: string, draftSpec: ProductSpec, actor?: { id: string; name: string }) {
+  return mutate((store) => {
+    if (!(store.products ?? []).some((item) => item.id === productId)) throw new Error("产品不存在。");
+    const timestamp = now();
+    const current = (store.productSpecs ?? []).find((item) => item.productId === productId);
+    const mergeStrings = (left: string[] = [], right: string[] = []) => Array.from(new Set([...left, ...right]));
+    const mergeComponents = (left: ProductSpec["components"] = [], right: ProductSpec["components"] = []) => {
+      const byName = new Map(left.map((item) => [item.name, item]));
+      for (const item of right) byName.set(item.name, { ...byName.get(item.name), ...item, states: mergeStrings(byName.get(item.name)?.states, item.states), interaction: mergeStrings(byName.get(item.name)?.interaction, item.interaction), sourceRequirementCodes: mergeStrings(byName.get(item.name)?.sourceRequirementCodes, item.sourceRequirementCodes) });
+      return Array.from(byName.values());
+    };
+    const base = current ?? emptyProductSpec(productId);
+    const saved: ProductSpec = {
+      ...base,
+      ...draftSpec,
+      id: current?.id ?? `spec_${productId}`,
+      productId,
+      version: (current?.version ?? 0) + 1,
+      rules: {
+        terminology: mergeStrings(base.rules.terminology, draftSpec.rules.terminology),
+        businessConstraints: mergeStrings(base.rules.businessConstraints, draftSpec.rules.businessConstraints),
+        copywriting: mergeStrings(base.rules.copywriting, draftSpec.rules.copywriting),
+      },
+      prd: {
+        ...base.prd,
+        ...draftSpec.prd,
+        structure: mergeStrings(base.prd.structure, draftSpec.prd.structure),
+        writingRules: mergeStrings(base.prd.writingRules, draftSpec.prd.writingRules),
+      },
+      tokens: { ...base.tokens, ...draftSpec.tokens },
+      components: mergeComponents(base.components, draftSpec.components),
+      demo: {
+        ...base.demo,
+        ...draftSpec.demo,
+        layoutPrinciples: mergeStrings(base.demo.layoutPrinciples, draftSpec.demo.layoutPrinciples),
+        componentReuseRules: mergeStrings(base.demo.componentReuseRules, draftSpec.demo.componentReuseRules),
+        interactionRequirements: mergeStrings(base.demo.interactionRequirements, draftSpec.demo.interactionRequirements),
+        constraints: mergeStrings(base.demo.constraints, draftSpec.demo.constraints),
+      },
+      updatedAt: timestamp,
+      updatedBy: actor?.name,
+    };
+    store.productSpecs ??= [];
+    if (current) Object.assign(current, saved); else store.productSpecs.push(saved);
+    return clone(saved);
+  });
 }
 
 export async function getRequirementDetail(requirementCode: string): Promise<RequirementDetail> {
@@ -1368,6 +1570,16 @@ async function analyseDemo(entryUrl: string): Promise<DemoAnalysis> {
   }
 }
 
+async function readDemoSource(entryUrl: string) {
+  const relative = /^\/demo-assets\/(.+)$/.exec(entryUrl)?.[1];
+  if (!relative) return "";
+  const segments = relative.split("/");
+  if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === ".." || /[\\/]/.test(segment))) return "";
+  const filePath = path.resolve(PUBLISHED_DEMO_DIR, ...segments);
+  if (!filePath.startsWith(`${PUBLISHED_DEMO_DIR}${path.sep}`)) return "";
+  try { return (await readFile(filePath, "utf8")).slice(0, 60_000); } catch { return ""; }
+}
+
 export async function getTestCaseGenerationContext(requirementCode: string, versionNo: number) {
   const store = await ensureStore();
   const requirement = store.requirements.find((item) => item.code === requirementCode);
@@ -1554,6 +1766,49 @@ export async function downloadRequirementVersion(requirementCode: string, versio
   for (const file of manifest.files) archive.addFile(file.path, await readFile(path.join(ASSET_OBJECT_DIR, file.hash)));
   archive.addFile("requirement.json", Buffer.from(JSON.stringify({ requirementCode, version: `v${version.number}`, createdAt: version.publishedAt, files: manifest.files }, null, 2), "utf8"));
   return { name: `${requirementCode}-v${version.number}.zip`, body: archive.toBuffer(), manifest };
+}
+
+export async function downloadRequirementDocument(
+  requirementCode: string,
+  versionNo: number,
+  kind: "prd" | "demo",
+  documentPath?: string,
+) {
+  safeSegment(requirementCode, "需求编码");
+  if (!Number.isInteger(versionNo) || versionNo < 1) throw new Error("版本号不合法。");
+  const store = await ensureStore();
+  const version = store.versions.find((item) => item.requirementCode === requirementCode && item.number === versionNo);
+  if (!version) throw new Error("版本不存在。");
+
+  const requestedPath = documentPath ? safeAssetPath(documentPath) : undefined;
+  const documents = version.documents?.filter((document) => document.kind === kind) ?? [];
+  const requestedDocument = requestedPath ? documents.find((document) => safeAssetPath(document.path) === requestedPath) : undefined;
+  if (requestedPath && !requestedDocument && version.assetManifest) throw new Error("文档不存在或类型不匹配。");
+
+  if (version.assetManifest) {
+    const manifestCandidates = version.assetManifest.files.filter((file) => kind === "prd" ? /^PRD\.md$/i.test(file.path) || /^prd\/.*\.(?:md|markdown)$/i.test(file.path) : file.path.startsWith("demo/") && /\.html?$/i.test(file.path));
+    const selectedPath = requestedDocument?.path ?? requestedPath ?? documents[0]?.path ?? (kind === "prd" ? manifestCandidates[0]?.path : manifestCandidates.find((file) => file.path.toLowerCase() === "demo/index.html")?.path ?? manifestCandidates[0]?.path);
+    if (!selectedPath) throw new Error(`${kind === "prd" ? "PRD" : "Demo"} 文件不存在。`);
+    const file = version.assetManifest.files.find((entry) => entry.path === safeAssetPath(selectedPath) && (kind === "prd" ? /^PRD\.md$/i.test(entry.path) || /^prd\/.*\.(?:md|markdown)$/i.test(entry.path) : entry.path.startsWith("demo/") && /\.html?$/i.test(entry.path)));
+    if (!file) throw new Error("文档不存在或类型不匹配。");
+    return { name: path.posix.basename(file.path), body: await readFile(path.join(ASSET_OBJECT_DIR, file.hash)), mimeType: file.mimeType || mimeType(file.path) };
+  }
+
+  if (kind === "prd") {
+    const name = path.posix.basename(requestedDocument?.path ?? requestedPath ?? "PRD.md");
+    if (!/\.(?:md|markdown)$/i.test(name)) throw new Error("PRD 文件类型不合法。");
+    return { name, body: Buffer.from(version.prd, "utf8"), mimeType: mimeType(name) };
+  }
+
+  const artifact = store.artifacts.find((item) => item.id === version.artifactId);
+  if (!artifact) throw new Error("历史版本缺少可下载的 Demo 工件。");
+  const rawEntryPath = requestedDocument?.path ?? requestedPath ?? artifact.entryFile;
+  const entryPath = safeAssetPath(rawEntryPath.startsWith("demo/") ? rawEntryPath.slice("demo/".length) : rawEntryPath);
+  if (entryPath.includes("/") || !/\.html?$/i.test(entryPath)) throw new Error("Demo 文件类型不合法。");
+  const filePath = path.resolve(ARTIFACT_DIR, artifact.id, entryPath);
+  const artifactRoot = path.resolve(ARTIFACT_DIR, artifact.id);
+  if (!filePath.startsWith(`${artifactRoot}${path.sep}`)) throw new Error("Demo 文件路径不合法。");
+  return { name: path.posix.basename(entryPath), body: await readFile(filePath), mimeType: mimeType(entryPath) };
 }
 
 export async function restoreRequirementVersion(requirementCode: string, sourceVersionNo: number, actor?: { id: string; name: string }) {

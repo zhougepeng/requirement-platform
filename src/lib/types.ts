@@ -184,6 +184,85 @@ export type Requirement = {
   scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
+  /** Optional primary product used as PRD/Demo generation context. */
+  productId?: string;
+};
+
+export type Product = {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProjectProduct = {
+  projectId: string;
+  productId: string;
+  createdAt: string;
+};
+
+export type ProductSpecComponent = {
+  name: string;
+  usage: string;
+  avoid?: string;
+  style?: Record<string, unknown>;
+  states?: string[];
+  interaction?: string[];
+  code?: string;
+  sourceRequirementCodes?: string[];
+};
+
+export type ProductSpec = {
+  id: string;
+  productId: string;
+  version: number;
+  rules: {
+    terminology: string[];
+    businessConstraints: string[];
+    copywriting: string[];
+  };
+  prd: {
+    template?: string;
+    structure: string[];
+    writingRules: string[];
+  };
+  tokens: {
+    color?: Record<string, unknown>;
+    typography?: Record<string, unknown>;
+    spacing?: Record<string, unknown>;
+    radius?: Record<string, unknown>;
+    shadow?: Record<string, unknown>;
+    border?: Record<string, unknown>;
+    layout?: Record<string, unknown>;
+  };
+  components: ProductSpecComponent[];
+  demo: {
+    layoutPrinciples: string[];
+    componentReuseRules: string[];
+    interactionRequirements: string[];
+    constraints: string[];
+  };
+  updatedAt: string;
+  updatedBy?: string;
+};
+
+export type ProductSpecChange = {
+  category: "added" | "supplemented" | "conflict";
+  path: string;
+  summary: string;
+  existing?: unknown;
+  incoming?: unknown;
+};
+
+export type ProductSpecPendingExtraction = {
+  id: string;
+  requirementCode: string;
+  productId: string;
+  changes: ProductSpecChange[];
+  draftSpec: ProductSpec;
+  createdAt: string;
+  status: "pending_review";
 };
 
 /** A persisted business event used by the requirement board timeline. */
@@ -212,7 +291,7 @@ export type DemoArtifact = {
 };
 
 export type RequirementStore = {
-  schemaVersion: 1;
+  schemaVersion: number;
   projects: Project[];
   requirements: Requirement[];
   versions: RequirementVersion[];
@@ -225,6 +304,10 @@ export type RequirementStore = {
   testCases?: RequirementTestCase[];
   /** Optional for backward compatibility with stores created before timeline support. */
   timelineEvents?: RequirementTimelineEvent[];
+  products?: Product[];
+  projectProducts?: ProjectProduct[];
+  productSpecs?: ProductSpec[];
+  productSpecPendingExtractions?: ProductSpecPendingExtraction[];
 };
 
 export type RequirementDetail = {

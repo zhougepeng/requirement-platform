@@ -19,9 +19,9 @@ import { RequirementDiscussionPanel } from "@/components/requirement-discussion-
 import { VersionAssetsPanel } from "@/components/version-assets-panel";
 import { Icon } from "@/components/icons";
 import { RequirementMarkdown } from "@/components/requirement-markdown";
-import { RequirementGapsPanel } from "@/components/requirement-gaps-panel";
 import { TestCasesPanel } from "@/components/test-cases-panel";
 import { VersionDocumentDirectory } from "@/components/version-document-directory";
+import { ProductSpecDialog } from "@/components/product-spec-dialog";
 import { WaitingAuthorization } from "@/components/waiting-authorization";
 import {
   RequirementReleaseStatus,
@@ -131,6 +131,12 @@ async function copyText(value: string) {
   const copied = document.execCommand("copy");
   fallback.remove();
   if (!copied) throw new Error("复制失败。");
+}
+
+function documentDownloadUrl(requirementCode: string, versionNo: number, kind: "prd" | "demo", documentPath?: string) {
+  const params = new URLSearchParams({ kind });
+  if (documentPath) params.set("path", documentPath);
+  return `/api/v1/requirements/${encodeURIComponent(requirementCode)}/versions/${versionNo}/document?${params.toString()}`;
 }
 
 function ProjectDirectory({
@@ -973,6 +979,7 @@ export function RequirementWorkspace({
   const [difySettingsRequest, setDifySettingsRequest] = useState(0);
   const [githubUpdateRequest, setGithubUpdateRequest] = useState(0);
   const [personalAccessTokenRequest, setPersonalAccessTokenRequest] = useState(0);
+  const [productSpecOpen, setProductSpecOpen] = useState(false);
   const [revealedPersonalAccessToken, setRevealedPersonalAccessToken] = useState("");
   const [publishOpen, setPublishOpen] = useState(false);
   const [snapshotPublishOpen, setSnapshotPublishOpen] = useState(false);
@@ -1040,7 +1047,6 @@ export function RequirementWorkspace({
   const selectedDemoUrl = selectedDemoDocument?.url ?? selectedVersion?.demoEntryUrl ?? "";
   const selectedVersionLoaded = Boolean(selectedVersion && loadedVersionDetails[selectedVersion.id]);
   const prdThreadCount = prdComments.filter((comment) => !comment.parentId).length;
-  const htmlThreadCount = htmlComments.filter((comment) => !comment.parentId).length;
   const openDiscussionCount = discussions.filter((item) => !item.parentId && item.status !== "closed").length;
   const canProcessDiscussions = Boolean(
     currentUser.canPublish ||
@@ -2078,8 +2084,28 @@ export function RequirementWorkspace({
                 </div>
                 <div className="header-actions">
                   <button className={`icon-button${discussionsOpen ? " is-active" : ""}`} onClick={() => setDiscussionsOpen((open) => !open)} title={`需求讨论${openDiscussionCount ? `（待处理 ${openDiscussionCount}）` : ""}`} aria-label="打开需求讨论"><Icon name="messages" />{openDiscussionCount ? <b className="prd-comment-count">{openDiscussionCount}</b> : null}</button>
-                  {tab === "demo" ? <button className={`icon-button${htmlCommentMode ? " is-active" : ""}`} onClick={() => { const next = !htmlCommentMode; setHtmlCommentMode(next); if (next) showCommentModeNotice(); }} title={`Demo 评论${htmlThreadCount ? `（${htmlThreadCount}）` : ""}`} aria-label="进入 Demo 评论态"><Icon name="message" />{htmlThreadCount ? <b className="prd-comment-count">{htmlThreadCount}</b> : null}</button> : null}
+                  {currentUser.canPublish ? <button className="icon-button product-spec-trigger" onClick={() => setProductSpecOpen(true)} title="提取产品规范" aria-label="提取产品规范"><Icon name="sparkles" /></button> : null}
                   {tab === "prd" || tab === "split" ? <button className={`icon-button${prdCommentMode ? " is-active" : ""}`} onClick={() => { const next = !prdCommentMode; setPrdCommentMode(next); if (next) showCommentModeNotice(); }} title={`PRD 评论${prdThreadCount ? `（${prdThreadCount}）` : ""}`} aria-label="进入 PRD 评论态"><Icon name="message" />{prdThreadCount ? <b className="prd-comment-count">{prdThreadCount}</b> : null}</button> : null}
+                  {tab === "demo" || tab === "split" ? (
+                    <a
+                      className="icon-button"
+                      href={documentDownloadUrl(detail!.requirement.code, selectedVersion!.number, "demo", selectedDemoDocument?.path)}
+                      title="下载当前 Demo 文件"
+                      aria-label="下载当前 Demo 文件"
+                    >
+                      <Icon name="download" />
+                    </a>
+                  ) : null}
+                  {tab === "prd" || tab === "split" ? (
+                    <a
+                      className="icon-button"
+                      href={documentDownloadUrl(detail!.requirement.code, selectedVersion!.number, "prd", selectedPrdDocument?.path)}
+                      title="下载当前 PRD 文件"
+                      aria-label="下载当前 PRD 文件"
+                    >
+                      <Icon name="download" />
+                    </a>
+                  ) : null}
                   <button
                     className={`icon-button${refreshingRequirement ? " is-refreshing" : ""}`}
                     onClick={() => void refreshCurrentRequirement()}
@@ -2330,27 +2356,6 @@ export function RequirementWorkspace({
                 )}
               </section>
             )}
-            {tab === "prd" ? (
-              <>
-                <div className="version-facts">
-                  <div>
-                    <span>发布于</span>
-                    <b>{selectedVersion!.publishedAt}</b>
-                  </div>
-                  <div>
-                  <span>更新人</span>
-                    <b>{selectedVersion!.publisher}</b>
-                  </div>
-                  <div>
-                    <span>版本说明</span>
-                    <b>{selectedVersion!.changeSummary}</b>
-                  </div>
-                </div>
-                <RequirementGapsPanel
-                  requirementCode={detail!.requirement.code}
-                />
-              </>
-            ) : null}
             {(tab === "prd" || tab === "split") ? <PrdCommentPanel
               open={prdCommentsOpen}
               comments={prdComments}
@@ -2375,6 +2380,7 @@ export function RequirementWorkspace({
               onUpdate={updateRequirementDiscussion}
               onDelete={deleteRequirementDiscussion}
             /> : null}
+            {detail && selectedVersion ? <ProductSpecDialog key={`${detail.requirement.code}-${productSpecOpen ? "open" : "closed"}`} open={productSpecOpen} requirementCode={detail.requirement.code} initialProductId={detail.requirement.productId} onClose={() => setProductSpecOpen(false)} onMerged={(productId) => setDetail((current) => current ? { ...current, requirement: { ...current.requirement, productId } } : current)} /> : null}
           </>
         )}
       </main>

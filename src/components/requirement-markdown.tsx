@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import mermaid from "mermaid";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PrdCommentAnchor, RequirementComment } from "@/lib/types";
+import { Icon } from "@/components/icons";
 
 let mermaidSequence = 0;
 const fallbackFlowchartSources = new Set<string>();
@@ -98,8 +99,16 @@ function renderFlowchartFallback(source: string) {
   const nodeSvg = [...nodes.values()].map((node) => {
     const point = positions.get(node.id);
     if (!point) return "";
-    const text = escapeSvgText(node.label.length > 22 ? `${node.label.slice(0, 21)}…` : node.label);
-    return `<g><rect x="${point.x - nodeWidth / 2}" y="${point.y - nodeHeight / 2}" width="${nodeWidth}" height="${nodeHeight}" rx="${node.decision ? 24 : 8}" class="flowchart-fallback-node${node.decision ? " is-decision" : ""}"/><text x="${point.x}" y="${point.y + 5}" text-anchor="middle" class="flowchart-fallback-node-text">${text}</text></g>`;
+    const words = [...node.label].reduce<string[]>((lines, character) => {
+      const current = lines[lines.length - 1] || "";
+      if (current.length >= 16) lines.push(character);
+      else if (lines.length) lines[lines.length - 1] = current + character;
+      else lines.push(character);
+      return lines;
+    }, []);
+    const text = words.slice(0, 3).map((line, index) => `<tspan x="${point.x}" dy="${index ? 16 : 0}">${escapeSvgText(line)}${index === 2 && words.length > 3 ? "…" : ""}</tspan>`).join("");
+    const textOffset = (Math.min(words.length, 3) - 1) * 8;
+    return `<g><rect x="${point.x - nodeWidth / 2}" y="${point.y - nodeHeight / 2}" width="${nodeWidth}" height="${nodeHeight}" rx="${node.decision ? 24 : 8}" class="flowchart-fallback-node${node.decision ? " is-decision" : ""}"/><text x="${point.x}" y="${point.y - textOffset + 5}" text-anchor="middle" class="flowchart-fallback-node-text">${text}</text></g>`;
   }).join("");
   return `<svg class="flowchart-fallback-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="业务流程图"><defs><marker id="flowchart-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#64748b"/></marker></defs>${edgeSvg}${nodeSvg}</svg>`;
 }
@@ -107,7 +116,22 @@ function renderFlowchartFallback(source: string) {
 function FlowchartFallback({ source }: { source: string }) {
   const svg = renderFlowchartFallback(source);
   if (!svg) return <div className="mermaid-diagram is-failed"><p>流程图语法无法渲染，保留原始内容供检查。</p><pre><code>{source}</code></pre></div>;
-  return <div className="mermaid-diagram flowchart-fallback" dangerouslySetInnerHTML={{ __html: svg }} />;
+  return <DiagramViewport svg={svg} className="flowchart-fallback" />;
+}
+
+function DiagramViewport({ svg, className = "" }: { svg: string; className?: string }) {
+  const [scale, setScale] = useState(100);
+  const [fullscreen, setFullscreen] = useState(false);
+  return <div className={`mermaid-diagram ${className}${fullscreen ? " is-fullscreen" : ""}`}>
+    <div className="mermaid-controls" role="toolbar" aria-label="流程图查看工具">
+      <button type="button" className="mermaid-zoom-button" onClick={() => setScale((value) => Math.max(50, value - 25))} title="缩小流程图" aria-label="缩小流程图">-</button>
+      <button type="button" onClick={() => setScale(100)} title="还原流程图大小" aria-label="还原流程图大小"><Icon name="refresh" /></button>
+      <button type="button" onClick={() => setScale((value) => Math.min(250, value + 25))} title="放大流程图" aria-label="放大流程图"><Icon name="plus" /></button>
+      <button type="button" onClick={() => setFullscreen((value) => !value)} title={fullscreen ? "退出完整流程图" : "展开完整流程图"} aria-label={fullscreen ? "退出完整流程图" : "展开完整流程图"}><Icon name="external" /></button>
+    </div>
+    <div className="mermaid-canvas" style={{ zoom: scale / 100 } as CSSProperties} dangerouslySetInnerHTML={{ __html: svg }} />
+    {fullscreen ? <button type="button" className="mermaid-fullscreen-dismiss" onClick={() => setFullscreen(false)} aria-label="关闭完整流程图" /> : null}
+  </div>;
 }
 
 function MermaidDiagram({ source }: { source: string }) {
@@ -151,7 +175,7 @@ function MermaidDiagram({ source }: { source: string }) {
   // Mermaid 11 的异步布局模块在当前 Next 开发环境中可能永远不返回；流程图直接使用本地 SVG 渲染，避免切换 PRD 后长期停在加载态。
   if (showFallback || isFlowchart) return <FlowchartFallback source={source} />;
   if (!svg) return <div className="mermaid-diagram is-loading" aria-busy="true">正在渲染流程图…</div>;
-  return <div className="mermaid-diagram" dangerouslySetInnerHTML={{ __html: svg }} />;
+  return <DiagramViewport svg={svg} />;
 }
 
 function resolveImageUrl(source: string, demoEntryUrl: string, assetBaseUrl?: string) {
