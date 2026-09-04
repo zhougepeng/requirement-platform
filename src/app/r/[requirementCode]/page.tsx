@@ -5,9 +5,10 @@ export default async function RequirementPage({
   searchParams,
 }: {
   params: Promise<{ requirementCode: string }>;
-  searchParams: Promise<{ v?: string }>;
+  searchParams: Promise<{ v?: string; returnTo?: string }>;
 }) {
-  const [{ requirementCode }, { v }] = await Promise.all([params, searchParams]);
+  const [{ requirementCode }, { v, returnTo }] = await Promise.all([params, searchParams]);
   const initialVersionNumber = v && /^\d+$/.test(v) ? Number(v) : undefined;
-  return <RequirementWorkspace initialRequirementCode={requirementCode} initialVersionNumber={initialVersionNumber} startInDetail />;
+  const initialReturnTo = returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : undefined;
+  return <RequirementWorkspace initialRequirementCode={requirementCode} initialVersionNumber={initialVersionNumber} initialReturnTo={initialReturnTo} startInDetail />;
 }

@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
+import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecEntry, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -319,6 +319,9 @@ async function ensureStore(): Promise<RequirementStore> {
   if (!Array.isArray(store.products)) { store.products = []; migrated = true; }
   if (!Array.isArray(store.projectProducts)) { store.projectProducts = []; migrated = true; }
   if (!Array.isArray(store.productSpecs)) { store.productSpecs = []; migrated = true; }
+  if (!store.globalSpec || typeof store.globalSpec !== "object") { store.globalSpec = emptyGlobalSpec(); migrated = true; }
+  if (!Array.isArray(store.productSpecSnapshots)) { store.productSpecSnapshots = []; migrated = true; }
+  if (!Array.isArray(store.globalSpecSnapshots)) { store.globalSpecSnapshots = []; migrated = true; }
   if (!Array.isArray(store.productSpecPendingExtractions)) { store.productSpecPendingExtractions = []; migrated = true; }
   for (const requirement of store.requirements) {
     const project = store.projects.find((item) => item.id === requirement.projectId);
@@ -514,7 +517,11 @@ export async function setRequirementProduct(requirementCode: string, productId: 
 }
 
 function emptyProductSpec(productId: string): ProductSpec {
-  return { id: `spec_${productId}`, productId, version: 0, rules: { terminology: [], businessConstraints: [], copywriting: [] }, prd: { structure: [], writingRules: [] }, tokens: {}, components: [], demo: { layoutPrinciples: [], componentReuseRules: [], interactionRequirements: [], constraints: [] }, updatedAt: now() };
+  return { id: `spec_${productId}`, productId, scope: "product", version: 0, rules: { terminology: [], businessConstraints: [], copywriting: [] }, prd: { structure: [], writingRules: [] }, tokens: {}, components: [], demo: { layoutPrinciples: [], componentReuseRules: [], interactionRequirements: [], constraints: [] }, entries: [], updatedAt: now() };
+}
+
+function emptyGlobalSpec(): ProductSpec {
+  return { id: "spec_global", productId: "", scope: "global", version: 0, rules: { terminology: [], businessConstraints: [], copywriting: [] }, prd: { structure: [], writingRules: [] }, tokens: {}, components: [], demo: { layoutPrinciples: [], componentReuseRules: [], interactionRequirements: [], constraints: [] }, entries: [], updatedAt: now() };
 }
 
 export async function getProductSpec(productId: string) {
@@ -523,12 +530,62 @@ export async function getProductSpec(productId: string) {
   return clone((store.productSpecs ?? []).find((item) => item.productId === productId) ?? emptyProductSpec(productId));
 }
 
+export async function getGlobalSpec() {
+  const store = await ensureStore();
+  return clone(store.globalSpec ?? emptyGlobalSpec());
+}
+
 export async function getProductGenerationContext(productId: string) {
-  const spec = await getProductSpec(productId);
-  return clone({ productId, rules: spec.rules, prd: spec.prd, tokens: spec.tokens, components: spec.components, demo: spec.demo });
+  const [spec, globalSpec] = await Promise.all([getProductSpec(productId), getGlobalSpec()]);
+  return clone({ productId, globalSpec, productSpec: spec, rules: spec.rules, prd: spec.prd, tokens: spec.tokens, components: spec.components, demo: spec.demo });
+}
+
+export async function getGenerationContext(input: { requirementId?: string; requirementCode?: string; projectId?: string; productId?: string; type?: "prd" | "demo" }) {
+  const store = await ensureStore();
+  const requirement = input.requirementId || input.requirementCode
+    ? store.requirements.find((item) => item.id === input.requirementId || item.code === input.requirementId || item.code === input.requirementCode)
+    : undefined;
+  const productId = input.productId || requirement?.productId || "";
+  const [globalSpec, productSpec] = await Promise.all([getGlobalSpec(), productId ? getProductSpec(productId) : Promise.resolve(emptyProductSpec(""))]);
+  const projectId = input.projectId || requirement?.projectId || "";
+  const currentVersion = requirement ? store.versions.find((item) => item.id === requirement.currentVersionId) : undefined;
+  return clone({
+    globalSpec,
+    productSpec: productId ? productSpec : null,
+    requirementContext: requirement ? { id: requirement.id, code: requirement.code, title: requirement.title, projectId, productId, versionNo: currentVersion?.number, prd: currentVersion?.prd ?? "" } : { projectId, productId },
+    effectiveSpecVersions: { global: globalSpec.version, product: productId ? productSpec.version : null },
+    type: input.type ?? "demo",
+  });
 }
 
 function unique(values: string[]) { return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).slice(0, 80); }
+
+function legacyEntries(spec: ProductSpec, sourceRequirementId = "", scope: "global" | "product" = spec.scope === "global" ? "global" : "product"): ProductSpecEntry[] {
+  const productId = scope === "product" ? spec.productId || undefined : undefined;
+  const make = (category: ProductSpecEntry["category"], title: string, description: string, structuredData: Record<string, unknown> = {}, level: ProductSpecEntry["level"] = "should") => ({
+    id: `entry_${randomUUID().replaceAll("-", "")}`,
+    category, scope, productId, title, description, structuredData,
+    sourceRequirementId: sourceRequirementId || undefined,
+    sourceProductId: productId,
+    level,
+    confidence: 0.6,
+  } satisfies ProductSpecEntry);
+  return [
+    ...spec.rules.terminology.map((value) => make("terminology", value, value, { term: value })),
+    ...spec.rules.businessConstraints.map((value) => make("business_rule", "业务约束", value, {}, "must")),
+    ...spec.rules.copywriting.map((value) => make("prd", "文案规则", value)),
+    ...spec.prd.structure.map((value) => make("template", "PRD 文档结构", value, { section: value })),
+    ...spec.prd.writingRules.map((value) => make("prd", "PRD 写作规则", value)),
+    ...spec.demo.layoutPrinciples.map((value) => make("layout", "Demo 布局原则", value)),
+    ...spec.demo.componentReuseRules.map((value) => make("component", "组件复用规则", value)),
+    ...spec.demo.interactionRequirements.map((value) => make("interaction", "Demo 交互要求", value)),
+    ...spec.demo.constraints.map((value) => make("demo", "Demo 开发约束", value, {}, "must")),
+  ];
+}
+
+function normalizedEntries(spec: ProductSpec, sourceRequirementId = "") {
+  return spec.entries?.length ? spec.entries : legacyEntries(spec, sourceRequirementId);
+}
 
 async function analyseProductSpec(requirementCode: string, productId: string): Promise<ProductSpec> {
   const store = await ensureStore();
@@ -544,7 +601,9 @@ async function analyseProductSpec(requirementCode: string, productId: string): P
   const demoSummary = version.demoEntryUrl ? await analyseDemo(version.demoEntryUrl) : { summary: "", demoIds: [], supportsAutomation: false };
   const componentNames = unique(["Button", "Input", "Select", "Dialog", "Table", "Tabs", "Card"].filter((name) => new RegExp(name, "i").test(demoSummary.summary) || new RegExp(name, "i").test(prd)));
   const components = componentNames.map((name) => ({ name, usage: `复用 ${name} 组件完成相同交互场景。`, states: ["default", "hover", "disabled"], interaction: [], sourceRequirementCodes: [requirementCode] }));
-  return { id: `spec_${productId}`, productId, version: 0, rules: { terminology, businessConstraints: constraints, copywriting: [] }, prd: { structure: headings, writingRules: ["先说明目标与范围，再描述流程、规则和验收标准。"] }, tokens: colors.length ? { color: { sourceColors: colors } } : {}, components, demo: { layoutPrinciples: ["保持与现有产品布局一致。"], componentReuseRules: ["优先复用已有组件，不重复创建近似组件。"], interactionRequirements: [], constraints: ["生成 Demo 必须覆盖正常、异常和空状态。"] }, updatedAt: now() };
+  const spec: ProductSpec = { id: `spec_${productId}`, productId, scope: "product", version: 0, rules: { terminology, businessConstraints: constraints, copywriting: [] }, prd: { structure: headings, writingRules: ["先说明目标与范围，再描述流程、规则和验收标准。"] }, tokens: colors.length ? { color: { sourceColors: colors } } : {}, components, demo: { layoutPrinciples: ["保持与现有产品布局一致。"], componentReuseRules: ["优先复用已有组件，不重复创建近似组件。"], interactionRequirements: [], constraints: ["生成 Demo 必须覆盖正常、异常和空状态。"] }, updatedAt: now() };
+  spec.entries = legacyEntries(spec, requirementCode);
+  return spec;
 }
 
 function compareProductSpec(existing: ProductSpec, incoming: ProductSpec): ProductSpecChange[] {
@@ -558,6 +617,14 @@ function compareProductSpec(existing: ProductSpec, incoming: ProductSpec): Produ
   compareList("demo.constraints", existing.demo.constraints, incoming.demo.constraints);
   if (existing.tokens.color && incoming.tokens.color && JSON.stringify(existing.tokens.color) !== JSON.stringify(incoming.tokens.color)) changes.push({ category: "conflict", path: "tokens.color", summary: "检测到颜色 Token 与现有规范不同。", existing: existing.tokens.color, incoming: incoming.tokens.color });
   for (const component of incoming.components) if (!existing.components.some((item) => item.name === component.name)) changes.push({ category: "added", path: `components.${component.name}`, summary: `新增可复用组件：${component.name}`, incoming: component });
+  const oldEntries = normalizedEntries(existing);
+  const oldByKey = new Map(oldEntries.map((entry) => [`${entry.scope}:${entry.category}:${entry.title}`, entry]));
+  for (const entry of normalizedEntries(incoming)) {
+    const key = `${entry.scope}:${entry.category}:${entry.title}`;
+    const previous = oldByKey.get(key);
+    if (!previous) changes.push({ category: "added", scope: entry.scope, productId: entry.productId, path: `entries.${entry.category}.${entry.title}`, summary: entry.description, incoming: entry });
+    else if (previous.description !== entry.description || JSON.stringify(previous.structuredData) !== JSON.stringify(entry.structuredData)) changes.push({ category: entry.level === "forbid" || previous.level === "forbid" ? "conflict" : "supplemented", scope: entry.scope, productId: entry.productId, path: `entries.${entry.category}.${entry.title}`, summary: entry.description, existing: previous, incoming: entry });
+  }
   return changes;
 }
 
@@ -605,6 +672,65 @@ export async function savePendingProductSpecExtraction(input: Omit<ProductSpecPe
   });
 }
 
+export async function listPendingProductSpecExtractions(productId?: string) {
+  const store = await ensureStore();
+  return clone((store.productSpecPendingExtractions ?? []).filter((item) => !productId || item.productId === productId));
+}
+
+export async function listProductSpecSnapshots(productId?: string, scope: "global" | "product" = "product") {
+  const store = await ensureStore();
+  const snapshots = scope === "global"
+    ? (store.globalSpecSnapshots ?? [])
+    : (store.productSpecSnapshots ?? []).filter((item) => !productId || item.productId === productId);
+  return clone(snapshots.toSorted((left, right) => right.version - left.version || right.createdAt.localeCompare(left.createdAt)));
+}
+
+export async function restoreProductSpecSnapshot(snapshotId: string, actor?: { id: string; name: string }) {
+  const store = await ensureStore();
+  const snapshot = [...(store.productSpecSnapshots ?? []), ...(store.globalSpecSnapshots ?? [])].find((item) => item.snapshotId === snapshotId);
+  if (!snapshot) throw new Error("规范快照不存在。");
+  if (snapshot.scope === "global") {
+    const current = store.globalSpec ?? emptyGlobalSpec();
+    return mutate((next) => {
+      next.globalSpecSnapshots ??= [];
+      next.globalSpecSnapshots.push({ ...clone(current), snapshotId: `global_spec_snapshot_${randomUUID().replaceAll("-", "")}`, createdAt: now(), createdBy: actor?.name });
+      next.globalSpec = { ...clone(snapshot), version: current.version + 1, updatedAt: now(), updatedBy: actor?.name };
+      return clone(next.globalSpec);
+    });
+  }
+  const current = (store.productSpecs ?? []).find((item) => item.productId === snapshot.productId);
+  return mutate((next) => {
+    next.productSpecSnapshots ??= [];
+    if (current) next.productSpecSnapshots.push({ ...clone(current), snapshotId: `product_spec_snapshot_${randomUUID().replaceAll("-", "")}`, createdAt: now(), createdBy: actor?.name });
+    const restored = { ...clone(snapshot), version: (current?.version ?? snapshot.version) + 1, updatedAt: now(), updatedBy: actor?.name };
+    const existing = (next.productSpecs ?? []).find((item) => item.productId === snapshot.productId);
+    if (existing) Object.assign(existing, restored); else { next.productSpecs ??= []; next.productSpecs.push(restored); }
+    return clone(restored);
+  });
+}
+
+export async function resolvePendingProductSpecExtraction(id: string, decisions: Array<{ path: string; action: "keep_existing" | "use_incoming" | "product_override" }>, actor?: { id: string; name: string }) {
+  const store = await ensureStore();
+  const pending = (store.productSpecPendingExtractions ?? []).find((item) => item.id === id);
+  if (!pending) throw new Error("待处理的规范冲突不存在。");
+  const decisionMap = new Map(decisions.map((item) => [item.path, item.action]));
+  const draft = clone(pending.draftSpec);
+  if (draft.entries?.length) {
+    draft.entries = draft.entries.flatMap((entry) => {
+      const action = decisionMap.get(`entries.${entry.category}.${entry.title}`);
+      if (action === "keep_existing") return [];
+      if (action === "product_override") return [{ ...entry, scope: "product" as const, productId: pending.productId, sourceProductId: pending.productId }];
+      return [entry];
+    });
+  }
+  const saved = await mergeProductSpec(pending.productId, draft, actor);
+  await mutate((current) => {
+    current.productSpecPendingExtractions = (current.productSpecPendingExtractions ?? []).filter((item) => item.id !== id);
+    return null;
+  });
+  return saved;
+}
+
 export async function mergeProductSpec(productId: string, draftSpec: ProductSpec, actor?: { id: string; name: string }) {
   return mutate((store) => {
     if (!(store.products ?? []).some((item) => item.id === productId)) throw new Error("产品不存在。");
@@ -616,39 +742,51 @@ export async function mergeProductSpec(productId: string, draftSpec: ProductSpec
       for (const item of right) byName.set(item.name, { ...byName.get(item.name), ...item, states: mergeStrings(byName.get(item.name)?.states, item.states), interaction: mergeStrings(byName.get(item.name)?.interaction, item.interaction), sourceRequirementCodes: mergeStrings(byName.get(item.name)?.sourceRequirementCodes, item.sourceRequirementCodes) });
       return Array.from(byName.values());
     };
-    const base = current ?? emptyProductSpec(productId);
-    const saved: ProductSpec = {
+    const mergeEntries = (left: ProductSpecEntry[] = [], right: ProductSpecEntry[] = [], scope: "global" | "product", targetProductId: string) => {
+      const byKey = new Map(left.map((item) => [`${item.category}:${item.title}`, item]));
+      for (const item of right) {
+        const normalized = { ...item, scope, productId: scope === "product" ? targetProductId : undefined, sourceProductId: scope === "product" ? targetProductId : undefined };
+        const key = `${normalized.category}:${normalized.title}`;
+        byKey.set(key, { ...byKey.get(key), ...normalized, structuredData: { ...byKey.get(key)?.structuredData, ...normalized.structuredData }, evidence: [...(byKey.get(key)?.evidence ?? []), ...(normalized.evidence ?? [])].slice(-8) });
+      }
+      return Array.from(byKey.values());
+    };
+    const mergeSpec = (base: ProductSpec, incoming: ProductSpec, scope: "global" | "product", targetProductId: string): ProductSpec => ({
       ...base,
-      ...draftSpec,
-      id: current?.id ?? `spec_${productId}`,
-      productId,
-      version: (current?.version ?? 0) + 1,
+      ...incoming,
+      id: base.id || incoming.id,
+      productId: targetProductId,
+      scope,
+      version: (base.version ?? 0) + 1,
       rules: {
-        terminology: mergeStrings(base.rules.terminology, draftSpec.rules.terminology),
-        businessConstraints: mergeStrings(base.rules.businessConstraints, draftSpec.rules.businessConstraints),
-        copywriting: mergeStrings(base.rules.copywriting, draftSpec.rules.copywriting),
+        terminology: mergeStrings(base.rules.terminology, incoming.rules.terminology),
+        businessConstraints: mergeStrings(base.rules.businessConstraints, incoming.rules.businessConstraints),
+        copywriting: mergeStrings(base.rules.copywriting, incoming.rules.copywriting),
       },
-      prd: {
-        ...base.prd,
-        ...draftSpec.prd,
-        structure: mergeStrings(base.prd.structure, draftSpec.prd.structure),
-        writingRules: mergeStrings(base.prd.writingRules, draftSpec.prd.writingRules),
-      },
-      tokens: { ...base.tokens, ...draftSpec.tokens },
-      components: mergeComponents(base.components, draftSpec.components),
-      demo: {
-        ...base.demo,
-        ...draftSpec.demo,
-        layoutPrinciples: mergeStrings(base.demo.layoutPrinciples, draftSpec.demo.layoutPrinciples),
-        componentReuseRules: mergeStrings(base.demo.componentReuseRules, draftSpec.demo.componentReuseRules),
-        interactionRequirements: mergeStrings(base.demo.interactionRequirements, draftSpec.demo.interactionRequirements),
-        constraints: mergeStrings(base.demo.constraints, draftSpec.demo.constraints),
-      },
+      prd: { ...base.prd, ...incoming.prd, structure: mergeStrings(base.prd.structure, incoming.prd.structure), writingRules: mergeStrings(base.prd.writingRules, incoming.prd.writingRules) },
+      tokens: { ...base.tokens, ...incoming.tokens },
+      components: mergeComponents(base.components, incoming.components),
+      demo: { ...base.demo, ...incoming.demo, layoutPrinciples: mergeStrings(base.demo.layoutPrinciples, incoming.demo.layoutPrinciples), componentReuseRules: mergeStrings(base.demo.componentReuseRules, incoming.demo.componentReuseRules), interactionRequirements: mergeStrings(base.demo.interactionRequirements, incoming.demo.interactionRequirements), constraints: mergeStrings(base.demo.constraints, incoming.demo.constraints) },
+      entries: mergeEntries(normalizedEntries(base), normalizedEntries(incoming).filter((entry) => entry.scope === scope), scope, targetProductId),
       updatedAt: timestamp,
       updatedBy: actor?.name,
-    };
+    });
+    const base = current ?? emptyProductSpec(productId);
+    const incomingProduct = { ...draftSpec, productId, scope: "product" as const };
+    const saved = mergeSpec(base, incomingProduct, "product", productId);
     store.productSpecs ??= [];
+    store.productSpecSnapshots ??= [];
+    if (current) store.productSpecSnapshots.push({ ...clone(current), snapshotId: `product_spec_snapshot_${randomUUID().replaceAll("-", "")}`, createdAt: timestamp, createdBy: actor?.name });
     if (current) Object.assign(current, saved); else store.productSpecs.push(saved);
+    const globalEntries = normalizedEntries(draftSpec).filter((entry) => entry.scope === "global");
+    if (globalEntries.length) {
+      const globalBase = store.globalSpec ?? emptyGlobalSpec();
+      const globalDraft = { ...emptyGlobalSpec(), entries: globalEntries, rules: { terminology: [], businessConstraints: [], copywriting: [] }, prd: { structure: [], writingRules: [] }, tokens: {}, components: [], demo: { layoutPrinciples: [], componentReuseRules: [], interactionRequirements: [], constraints: [] } };
+      const globalSaved = mergeSpec(globalBase, globalDraft, "global", "");
+      store.globalSpecSnapshots ??= [];
+      if (store.globalSpec) store.globalSpecSnapshots.push({ ...clone(store.globalSpec), snapshotId: `global_spec_snapshot_${randomUUID().replaceAll("-", "")}`, createdAt: timestamp, createdBy: actor?.name });
+      store.globalSpec = globalSaved;
+    }
     return clone(saved);
   });
 }

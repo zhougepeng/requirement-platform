@@ -44,6 +44,7 @@ import type {
 
 type Tab = "demo" | "prd" | "split" | "test-cases" | "versions";
 type View = "board" | "detail" | "projects" | "requirements" | "materials" | "my-requirements";
+export type WorkspaceView = Exclude<View, "detail">;
 type ApiResponse<T> =
   { data: T; error?: never } | { data?: never; error: string };
 type CurrentUser = {
@@ -337,7 +338,7 @@ function RequirementBoard({
         const date = requirement.status === "online"
           ? requirement.releaseDate
           : requirement.status === "scheduled"
-            ? requirement.scheduledFullDate
+            ? requirement.scheduledFullDate ?? requirement.scheduledGrayDate
             : undefined;
         const month = date?.slice(0, 7);
         if (!month) continue;
@@ -349,10 +350,7 @@ function RequirementBoard({
         if (requirement.status === "scheduled") byMonth.get(month)?.scheduledItems.push(item);
       }
     }
-    const firstMonthWithData = buckets.findIndex(
-      (bucket) => bucket.onlineItems.length || bucket.scheduledItems.length,
-    );
-    return firstMonthWithData < 0 ? [] : buckets.slice(firstMonthWithData);
+    return buckets;
   }, [projects]);
 
   return (
@@ -384,7 +382,15 @@ function RequirementBoard({
         </div>
       </div>
       <MonthlyReleaseChart months={monthlyReleases} />
-      <div className="board-project-grid">
+      <div className="board-project-list">
+        <div className="board-project-list-head" aria-hidden="true">
+          <span className="board-project-list-project">项目</span>
+          <span>需求数</span>
+          <span>已上线</span>
+          <span>已排期</span>
+          <span>未上线</span>
+          <span />
+        </div>
         {projects.map((project) => {
           const total = project.requirements.length;
           const online = project.requirements.filter(
@@ -398,20 +404,18 @@ function RequirementBoard({
           return (
             <button
               key={project.id}
-              className="board-project-card"
+              className="board-project-row"
               onClick={() => onOpenProject(project)}
             >
               <span className="board-project-icon"><Icon name="folder" /></span>
               <span className="board-project-title">
                 <b>{project.name}</b>
-                <small><em className={`board-project-status ${ongoing ? "is-ongoing" : "is-complete"}`}>{ongoing ? "进行中" : "已全部上线"}</em></small>
+                <em className={`board-project-status ${ongoing ? "is-ongoing" : "is-complete"}`}>{ongoing ? "进行中" : "已全部上线"}</em>
               </span>
-              <span className="board-project-counts">
-                <span><small>需求数</small><b>{total}</b></span>
-                <span><small>已上线</small><b className="is-online">{online}</b></span>
-                <span><small>已排期</small><b className="is-scheduled">{scheduled}</b></span>
-                <span><small>未上线</small><b className="is-offline">{offline}</b></span>
-              </span>
+              <b className="board-project-value">{total}</b>
+              <b className="board-project-value is-online">{online}</b>
+              <b className="board-project-value is-scheduled">{scheduled}</b>
+              <b className="board-project-value is-offline">{offline}</b>
               <Icon name="chevron" />
             </button>
           );
@@ -739,7 +743,7 @@ function MyRequirements({
         <div className="my-requirements-overview">
           <div className="board-metric is-ongoing"><span className="board-metric-icon"><Icon name="folder" /></span><div><small>进行中项目</small><b>{ongoingProjects}</b></div></div>
           <div className="board-metric is-offline"><span className="board-metric-icon"><Icon name="file" /></span><div><small>未上线</small><b>{offlineRequirements.length}</b></div></div>
-          <div className="board-metric is-online"><span className="board-metric-icon"><Icon name="check" /></span><div><small>已上线</small><b>{onlineRequirements.length}</b></div></div>
+          <div className="board-metric is-scheduled"><span className="board-metric-icon"><Icon name="file" /></span><div><small>已排期</small><b>{scheduledRequirements.length}</b></div></div>
         </div>
       </header>
       {loading ? <p className="my-requirements-empty">正在加载我的需求...</p> : loadError ? (
@@ -926,21 +930,27 @@ function RequirementList({
 export function RequirementWorkspace({
   initialRequirementCode,
   initialVersionNumber,
+  initialReturnTo,
+  initialView,
+  initialProjectId,
   startInDetail = false,
   forceWaitingAuthorization = false,
 }: {
   initialRequirementCode?: string;
   initialVersionNumber?: number;
+  initialReturnTo?: string;
+  initialView?: WorkspaceView;
+  initialProjectId?: string;
   startInDetail?: boolean;
   forceWaitingAuthorization?: boolean;
 }) {
   const router = useRouter();
-  const [view, setView] = useState<View>(startInDetail ? "detail" : "board");
+  const [view, setView] = useState<View>(startInDetail ? "detail" : initialView ?? "board");
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectRequirements, setProjectRequirements] = useState<
     RequirementSummary[]
   >([]);
-  const [activeProjectId, setActiveProjectId] = useState("");
+  const [activeProjectId, setActiveProjectId] = useState(initialProjectId ?? "");
   const [detail, setDetail] = useState<RequirementDetail | RequirementDetailSummary | null>(null);
   const [versions, setVersions] = useState<RequirementVersion[]>([]);
   const [loadedVersionDetails, setLoadedVersionDetails] = useState<Record<string, RequirementVersion>>({});
@@ -1285,10 +1295,15 @@ export function RequirementWorkspace({
 
   const openRequirement = useCallback(
     (requirementCode: string, versionNumber?: number) => {
-      const query = versionNumber === undefined ? "" : `?v=${versionNumber}`;
-      router.push(`/r/${encodeURIComponent(requirementCode)}${query}`);
+      const returnQuery = new URLSearchParams();
+      if (view !== "board") returnQuery.set("view", view);
+      if (view === "requirements" && activeProjectId) returnQuery.set("project", activeProjectId);
+      const returnTo = `/${returnQuery.toString() ? `?${returnQuery.toString()}` : ""}`;
+      const query = new URLSearchParams({ returnTo });
+      if (versionNumber !== undefined) query.set("v", String(versionNumber));
+      router.push(`/r/${encodeURIComponent(requirementCode)}?${query.toString()}`);
     },
-    [router],
+    [activeProjectId, router, view],
   );
 
   useEffect(() => {
@@ -1320,7 +1335,8 @@ export function RequirementWorkspace({
         } else {
           const nextProjects = await projectsPromise;
           setProjects(nextProjects);
-          setView("board");
+          setActiveProjectId(initialProjectId ?? "");
+          setView(initialView ?? "board");
         }
         setLoading(false);
       })
@@ -1330,7 +1346,7 @@ export function RequirementWorkspace({
         );
         setLoading(false);
       });
-  }, [initialRequirementCode, initialVersionNumber, selectVersion, startInDetail]);
+  }, [initialProjectId, initialRequirementCode, initialVersionNumber, initialView, selectVersion, startInDetail]);
 
   async function copyLink() {
     if (!detail || !selectedVersion) return;
@@ -2006,7 +2022,11 @@ export function RequirementWorkspace({
                   <button
                     className="breadcrumb"
                     onClick={() => {
-                      if (startInDetail) router.push("/");
+                      if (startInDetail) {
+                        if (initialReturnTo) router.push(initialReturnTo);
+                        else if (window.history.length > 1) router.back();
+                        else router.push("/");
+                      }
                       else setView("requirements");
                     }}
                     title={`返回 ${activeProject!.name}`}

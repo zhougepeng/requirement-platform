@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { ProductSpec, ProductSpecComponent } from "@/lib/types";
+import type { ProductSpec, ProductSpecComponent, ProductSpecEntry, ProductSpecEvidence } from "@/lib/types";
 import { reasoningEffortPayload, resolveAssistantModel } from "@/services/assistant/model-config";
 import { extractProductSpec, getProductSpecExtractionContext } from "@/services/requirement/repository";
 
@@ -131,12 +131,35 @@ function components(value: unknown, requirementCode: string, fallback: ProductSp
   return parsed.length ? parsed : fallback;
 }
 
+const categories = new Set<ProductSpecEntry["category"]>(["prd", "token", "component", "layout", "interaction", "template", "demo", "terminology", "business_rule"]);
+const levels = new Set<ProductSpecEntry["level"]>(["must", "should", "forbid"]);
+function entries(value: unknown, requirementCode: string, productId: string, fallback: ProductSpecEntry[]) {
+  if (!Array.isArray(value)) return fallback;
+  return value.flatMap((entry, index) => {
+    const item = record(entry);
+    if (!item) return [];
+    const title = typeof item.title === "string" ? item.title.trim().slice(0, 160) : "";
+    const description = typeof item.description === "string" ? item.description.trim().slice(0, 1200) : "";
+    if (!title || !description) return [];
+    const scope = item.scope === "global" ? "global" : "product";
+    const category = categories.has(item.category as ProductSpecEntry["category"]) ? item.category as ProductSpecEntry["category"] : "demo";
+    const level = levels.has(item.level as ProductSpecEntry["level"]) ? item.level as ProductSpecEntry["level"] : "should";
+    const evidence = Array.isArray(item.evidence) ? item.evidence.flatMap((candidate) => {
+      const source = record(candidate);
+      if (!source || typeof source.sourceType !== "string") return [];
+      return [{ sourceType: ["prd", "demo_html", "css", "dom", "test"].includes(source.sourceType) ? source.sourceType as ProductSpecEvidence["sourceType"] : "demo_html", path: typeof source.path === "string" ? source.path.slice(0, 500) : undefined, selector: typeof source.selector === "string" ? source.selector.slice(0, 300) : undefined, excerpt: typeof source.excerpt === "string" ? source.excerpt.slice(0, 800) : undefined }];
+    }).slice(0, 8) : [];
+    return [{ id: typeof item.id === "string" ? item.id.slice(0, 120) : `entry_${requirementCode}_${index}`, category, scope, productId: scope === "product" ? productId : undefined, title, description, structuredData: record(item.structuredData) ?? {}, sourceRequirementId: requirementCode, sourceProductId: scope === "product" ? productId : undefined, level, evidence, confidence: typeof item.confidence === "number" ? Math.max(0, Math.min(1, item.confidence)) : undefined } satisfies ProductSpecEntry];
+  }).slice(0, 120);
+}
+
 function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode: string): ProductSpec {
   const source = record(value.spec) ?? value;
   const rules = record(source.rules);
   const prd = record(source.prd);
   const demo = record(source.demo);
   const tokens = record(source.tokens);
+  const parsedEntries = entries(source.entries, requirementCode, program.productId, program.entries ?? []);
   return {
     id: program.id,
     productId: program.productId,
@@ -158,6 +181,8 @@ function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode:
       interactionRequirements: strings(demo?.interactionRequirements),
       constraints: strings(demo?.constraints).length ? strings(demo?.constraints) : program.demo.constraints,
     },
+    entries: parsedEntries,
+    scope: "product",
     updatedAt: new Date().toISOString(),
   };
 }
@@ -165,7 +190,7 @@ function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode:
 export async function extractProductSpecWithModel(requirementCode: string, productId: string) {
   const context = await getProductSpecExtractionContext(requirementCode, productId);
   const { baseUrl, apiKey, model, reasoningEffort } = await resolveAssistantModel();
-  const systemPrompt = "你是产品规范提取助手。先以程序分析结果为事实基础，再理解 PRD、Demo HTML/CSS/DOM 和测试用例。只沉淀同一产品未来需求仍可复用的规则；一次性业务逻辑、临时数据和未经证实的推测不得写入规范。只输出一个完整、严格合法的 JSON 对象，不要输出 Markdown、代码围栏、解释或前后缀文字：{spec:{rules:{terminology:string[],businessConstraints:string[],copywriting:string[]},prd:{structure:string[],writingRules:string[]},tokens:object,components:[{name,usage,avoid,style,states:string[],interaction:string[],code}],demo:{layoutPrinciples:string[],componentReuseRules:string[],interactionRequirements:string[],constraints:string[]}}}。组件必须说明使用场景；没有可靠信息的字段返回空数组或空对象。";
+  const systemPrompt = "你是产品规范提取助手。先以程序分析结果为事实基础，再理解 PRD、Demo HTML/CSS/DOM 和测试用例。只沉淀同一产品未来需求仍可复用的规则；一次性业务逻辑、临时数据和未经证实的推测不得写入规范。只输出一个完整、严格合法的 JSON 对象，不要输出 Markdown、代码围栏、解释或前后缀文字：{spec:{entries:[{category:\"prd|token|component|layout|interaction|template|demo|terminology|business_rule\",scope:\"global|product\",title,description,structuredData,level:\"must|should|forbid\",evidence:[{sourceType,path,selector,excerpt}],confidence}],rules:{terminology:string[],businessConstraints:string[],copywriting:string[]},prd:{structure:string[],writingRules:string[]},tokens:object,components:[{name,usage,avoid,style,states:string[],interaction:string[],code}],demo:{layoutPrinciples:string[],componentReuseRules:string[],interactionRequirements:string[],constraints:string[]}}}。公共规范只记录跨产品可复用规则；产品规范只记录当前产品专属规则。每条 entries 必须有 title、description、category、scope、level；没有可靠证据的字段返回空数组或空对象。组件必须说明使用场景。";
   const userPrompt = `需求：${context.requirement.title}（${context.requirement.code}）\n版本：V${context.version.number}\n变更：${context.version.changeSummary || "无"}\n\n程序分析结果（这是可验证事实，已覆盖完整 Demo）：\n${JSON.stringify(context.programSpec)}\n\nPRD：\n${bounded(context.prd, 16_000)}\n\nDemo 页面分析：\n${bounded(context.demoSummary.summary, 3_000)}\n可用 data-demo-id：${context.demoSummary.demoIds.join(",") || "无"}\n\n从 Demo HTML/CSS/DOM 中抽取的证据：\n${demoEvidence(context.demoHtml)}\n\n测试用例（辅助理解，不得把测试步骤误写为产品规则）：\n${JSON.stringify(compactTestCases(context.testCases))}`;
   async function requestCompletion(prompt: string, lowReasoning = false) {
     let response: Response;

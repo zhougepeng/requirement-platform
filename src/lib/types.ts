@@ -213,6 +213,30 @@ export type ProductSpecComponent = {
   sourceRequirementCodes?: string[];
 };
 
+export type SpecScope = "global" | "product";
+export type SpecCategory = "prd" | "token" | "component" | "layout" | "interaction" | "template" | "demo" | "terminology" | "business_rule";
+export type SpecLevel = "must" | "should" | "forbid";
+export type ProductSpecEvidence = {
+  sourceType: "prd" | "demo_html" | "css" | "dom" | "test";
+  path?: string;
+  selector?: string;
+  excerpt?: string;
+};
+export type ProductSpecEntry = {
+  id: string;
+  category: SpecCategory;
+  scope: SpecScope;
+  productId?: string;
+  title: string;
+  description: string;
+  structuredData: Record<string, unknown>;
+  sourceRequirementId?: string;
+  sourceProductId?: string;
+  level: SpecLevel;
+  evidence?: ProductSpecEvidence[];
+  confidence?: number;
+};
+
 export type ProductSpec = {
   id: string;
   productId: string;
@@ -243,12 +267,17 @@ export type ProductSpec = {
     interactionRequirements: string[];
     constraints: string[];
   };
+  /** Structured rules are the executable form. Legacy fields remain for compatibility. */
+  entries?: ProductSpecEntry[];
+  scope?: SpecScope;
   updatedAt: string;
   updatedBy?: string;
 };
 
 export type ProductSpecChange = {
   category: "added" | "supplemented" | "conflict";
+  scope?: SpecScope;
+  productId?: string;
   path: string;
   summary: string;
   existing?: unknown;
@@ -263,6 +292,12 @@ export type ProductSpecPendingExtraction = {
   draftSpec: ProductSpec;
   createdAt: string;
   status: "pending_review";
+};
+
+export type ProductSpecSnapshot = ProductSpec & {
+  snapshotId: string;
+  createdAt: string;
+  createdBy?: string;
 };
 
 /** A persisted business event used by the requirement board timeline. */
@@ -307,6 +342,9 @@ export type RequirementStore = {
   products?: Product[];
   projectProducts?: ProjectProduct[];
   productSpecs?: ProductSpec[];
+  globalSpec?: ProductSpec;
+  productSpecSnapshots?: ProductSpecSnapshot[];
+  globalSpecSnapshots?: ProductSpecSnapshot[];
   productSpecPendingExtractions?: ProductSpecPendingExtraction[];
 };
 
