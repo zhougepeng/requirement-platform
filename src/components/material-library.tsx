@@ -11,6 +11,7 @@ type Directory = { id: string; name: string; scope: MaterialScope; projectId?: s
 type ApiResponse<T> = { data: T; error?: never } | { data?: never; error: string };
 type Target = { scope: MaterialScope | "product" | "global"; projectId?: string; productId?: string; directoryId?: string; label: string };
 type DirectoryDraft = { scope: MaterialScope; projectId?: string; parentId?: string; label: string };
+const EMPTY_SPEC_SNAPSHOTS: ProductSpecSnapshot[] = [];
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
@@ -44,14 +45,7 @@ function DirectoryBranch({ directory, directories, target, canEdit, depth, onCho
   </>;
 }
 
-function ProductSpecView({ product, spec, snapshots = [], canEdit, onRestore }: { product: Product; spec: ProductSpec | null; snapshots?: ProductSpecSnapshot[]; canEdit?: boolean; onRestore?: (snapshot: ProductSpecSnapshot) => void }) {
-  const [history, setHistory] = useState<ProductSpecSnapshot[]>(snapshots);
-  useEffect(() => {
-    setHistory(snapshots);
-    if (snapshots.length || !product.id) return;
-    const endpoint = product.id === "global" ? "/api/v1/specs/global/versions" : `/api/v1/products/${encodeURIComponent(product.id)}/spec/versions`;
-    void fetch(endpoint, { headers: { "Content-Type": "application/json" } }).then((response) => response.ok ? response.json() as Promise<ApiResponse<ProductSpecSnapshot[]>> : null).then((body) => { if (body && "data" in body && body.data) setHistory(body.data); }).catch(() => undefined);
-  }, [product.id, snapshots]);
+function ProductSpecView({ product, spec, snapshots = EMPTY_SPEC_SNAPSHOTS, canEdit, onRestore }: { product: Product; spec: ProductSpec | null; snapshots?: ProductSpecSnapshot[]; canEdit?: boolean; onRestore?: (snapshot: ProductSpecSnapshot) => void }) {
   if (!spec) return <div className="material-list-empty"><Icon name="file" /><p>正在读取产品规范…</p></div>;
   const list = (values: string[]) => values.length ? <ul>{values.map((value) => <li key={value}>{value}</li>)}</ul> : <p>暂未沉淀</p>;
   return <article className="material-preview material-product-spec-view">
@@ -62,7 +56,7 @@ function ProductSpecView({ product, spec, snapshots = [], canEdit, onRestore }: 
     <section><h4>UI 样式</h4><pre>{Object.keys(spec.tokens).length ? JSON.stringify(spec.tokens, null, 2) : "暂未沉淀 Token"}</pre></section>
     <section><h4>组件与交互</h4>{spec.components.length ? <div className="material-product-components">{spec.components.map((component) => <article key={component.name}><b>{component.name}</b><p>{component.usage}</p>{component.avoid ? <small>不适用：{component.avoid}</small> : null}{component.interaction?.length ? <small>交互：{component.interaction.join("；")}</small> : null}</article>)}</div> : <p>暂未沉淀</p>}</section>
      <section><h4>Demo 规范</h4><b>布局原则</b>{list(spec.demo.layoutPrinciples)}<b>组件复用</b>{list(spec.demo.componentReuseRules)}<b>交互要求</b>{list(spec.demo.interactionRequirements)}<b>开发约束</b>{list(spec.demo.constraints)}</section>
-     <section className="material-product-spec-history"><h4>历史版本</h4>{history.length ? history.map((snapshot) => <article key={snapshot.snapshotId}><div><b>V{snapshot.version}</b><small>{snapshot.createdAt.slice(0, 16).replace("T", " ")}{snapshot.createdBy ? ` · ${snapshot.createdBy}` : ""}</small></div>{canEdit && onRestore ? <button className="project-dialog-cancel" onClick={() => onRestore(snapshot)}>回滚为此版本</button> : null}</article>) : <p>暂无历史版本</p>}</section>
+     <section className="material-product-spec-history"><h4>历史版本</h4>{snapshots.length ? snapshots.map((snapshot) => <article key={snapshot.snapshotId}><div><b>V{snapshot.version}</b><small>{snapshot.createdAt.slice(0, 16).replace("T", " ")}{snapshot.createdBy ? ` · ${snapshot.createdBy}` : ""}</small></div>{canEdit && onRestore ? <button className="project-dialog-cancel" onClick={() => onRestore(snapshot)}>回滚为此版本</button> : null}</article>) : <p>暂无历史版本</p>}</section>
   </article>;
 }
 

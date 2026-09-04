@@ -30,7 +30,7 @@ export type PublishRequirementInput = {
   requirementCode?: string;
   title: string;
   prdMarkdown: string;
-  artifactId: string;
+  artifactId?: string;
   changeSummary: string;
   actor?: { id: string; name: string };
 };
@@ -167,7 +167,6 @@ async function snapshotFromEntries(entries: Array<{ path: string; data: Buffer }
 async function materializeSnapshotDemo(manifest: RequirementAssetManifest, projectCode: string, requirementCode: string, versionNo: number) {
   const demoFiles = manifest.files.filter((file) => file.path.startsWith("demo/"));
   const demoEntry = demoFiles.find((file) => file.path.toLowerCase() === "demo/index.html") ?? demoFiles.find((file) => /\.html?$/i.test(file.path));
-  if (!demoEntry) throw new Error("需求资产必须包含 demo/ 下的 HTML 文件。");
   safeSegment(projectCode, "项目编码"); safeSegment(requirementCode, "需求编码");
   const destination = path.join(PUBLISHED_DEMO_DIR, projectCode, requirementCode, `v${versionNo}`);
   const temporary = `${destination}.${randomUUID()}.tmp`;
@@ -180,7 +179,7 @@ async function materializeSnapshotDemo(manifest: RequirementAssetManifest, proje
   }
   await mkdir(path.dirname(destination), { recursive: true });
   await rename(temporary, destination);
-  return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/${demoEntry.path}`;
+  return demoEntry ? `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/${demoEntry.path}` : undefined;
 }
 
 async function parseSnapshotArchive(file: File) {
@@ -193,7 +192,6 @@ async function parseSnapshotArchive(file: File) {
     .map((entry) => ({ path: safeAssetPath(snapshotEntryPath(entry)), data: entry.getData() }));
   const prdEntries = entries.filter((entry) => /(?:^|\/)prd\.(?:md|markdown)$/i.test(entry.path) || /^prd\/.+\.(?:md|markdown)$/i.test(entry.path) || /^PRD\.md$/i.test(entry.path));
   if (!prdEntries.length) throw new Error("需求资产 ZIP 必须包含 PRD.md 或 prd/ 下的 Markdown 文件。");
-  if (!entries.some((entry) => entry.path.startsWith("demo/") && /\.html?$/i.test(entry.path))) throw new Error("需求资产 ZIP 必须包含 demo/ 下的 HTML 文件。");
   return entries;
 }
 
@@ -270,7 +268,7 @@ async function ensureStore(): Promise<RequirementStore> {
     }
   }
   for (const version of store.versions) {
-    if (!version.demoEntryUrl.startsWith("/demos/published/")) continue;
+    if (!version.demoEntryUrl?.startsWith("/demos/published/")) continue;
     const artifact = store.artifacts.find((item) => item.id === version.artifactId);
     if (!artifact) throw new Error("Demo 工件数据不完整。");
     version.demoEntryUrl = await publishArtifactFiles(artifact, "erp", version.requirementCode, version.number);
@@ -1129,7 +1127,7 @@ export type RequirementKnowledgeMatch = {
   documentName?: string;
   documentPath?: string;
   excerpt: string;
-  demoEntryUrl: string;
+  demoEntryUrl?: string;
   isHistorical: boolean;
   releaseStatus: RequirementReleaseStatus;
   scheduleVersion?: string;
@@ -1724,7 +1722,7 @@ export async function getTestCaseGenerationContext(requirementCode: string, vers
   const version = store.versions.find((item) => item.requirementCode === requirementCode && item.number === versionNo);
   const project = requirement ? store.projects.find((item) => item.id === requirement.projectId) : undefined;
   if (!requirement || !version || !project || archived(requirement) || archived(project)) throw new Error("需求或版本不存在，或已作废。");
-  const demo = await analyseDemo(version.demoEntryUrl);
+  const demo = version.demoEntryUrl ? await analyseDemo(version.demoEntryUrl) : { summary: "当前版本没有 Demo。", demoIds: [], supportsAutomation: false };
   const historicalTestCases = (store.testCases ?? [])
     .filter((item) => item.requirementCode === requirementCode && item.versionNo !== versionNo)
     .toSorted((left, right) => right.versionNo - left.versionNo || left.id.localeCompare(right.id))
@@ -1785,10 +1783,10 @@ export async function publishRequirement(input: PublishRequirementInput) {
 
   return mutate(async (store) => {
     const project = store.projects.find((item) => item.id === projectCode);
-    const artifact = store.artifacts.find((item) => item.id === input.artifactId);
+    const artifact = input.artifactId ? store.artifacts.find((item) => item.id === input.artifactId) : undefined;
     if (!project) throw new Error("项目不存在。");
     if (archived(project)) throw new Error("已作废项目不能发布需求，请先恢复项目。");
-    if (!artifact) throw new Error("Demo 工件不存在。");
+    if (input.artifactId && !artifact) throw new Error("Demo 工件不存在。");
 
     const requirementCode = requestedRequirementCode || nextRequirementCode(project.id, store);
     let requirement = store.requirements.find((item) => item.code === requirementCode);
@@ -1802,7 +1800,8 @@ export async function publishRequirement(input: PublishRequirementInput) {
 
     const versions = store.versions.filter((item) => item.requirementCode === requirementCode);
     const number = versions.reduce((max, version) => Math.max(max, version.number), 0) + 1;
-    const demoEntryUrl = await publishArtifactFiles(artifact, projectCode, requirementCode, number);
+    const demoEntryUrl = artifact ? await publishArtifactFiles(artifact, projectCode, requirementCode, number) : undefined;
+    const assetManifest = artifact ? undefined : await snapshotFromEntries([{ path: "PRD.md", data: Buffer.from(prdMarkdown, "utf8") }]);
     const version: RequirementVersion = {
       id: randomUUID(),
       requirementCode,
@@ -1812,10 +1811,11 @@ export async function publishRequirement(input: PublishRequirementInput) {
       changeSummary,
       prd: prdMarkdown,
       demoEntryUrl,
-      artifactId: artifact.id,
+      artifactId: artifact?.id || `prd_${randomUUID().replaceAll("-", "")}`,
+      ...(assetManifest ? { assetManifest } : {}),
       documents: [
         { id: `${requirementCode}:v${number}:prd`, name: "PRD.md", path: "PRD.md", kind: "prd", mimeType: "text/markdown", order: 0, content: prdMarkdown },
-        { id: `${requirementCode}:v${number}:demo`, name: artifact.entryFile, path: artifact.entryFile, kind: "demo", mimeType: mimeType(artifact.entryFile), order: 0, url: demoEntryUrl },
+        ...(artifact && demoEntryUrl ? [{ id: `${requirementCode}:v${number}:demo`, name: artifact.entryFile, path: artifact.entryFile, kind: "demo" as const, mimeType: mimeType(artifact.entryFile), order: 0, url: demoEntryUrl }] : []),
       ],
     };
     store.versions.push(version);

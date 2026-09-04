@@ -6,7 +6,7 @@ export type RequirementVersion = {
   publisher: string;
   changeSummary: string;
   prd: string;
-  demoEntryUrl: string;
+  demoEntryUrl?: string;
   artifactId: string;
   versionName?: string;
   sourceVersionNo?: number;

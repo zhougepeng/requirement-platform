@@ -1040,6 +1040,7 @@ export function RequirementWorkspace({
         (a, b) => a.order - b.order || a.name.localeCompare(b.name),
       );
     if (documents.length) return documents;
+    if (!selectedVersion.demoEntryUrl) return [];
     return [{
       id: `${selectedVersion.id}:legacy-demo`,
       name: "index.html",
@@ -1055,6 +1056,7 @@ export function RequirementWorkspace({
   const selectedPrdSource = selectedPrdDocument?.content ?? selectedVersion?.prd ?? "";
   const selectedPrdAssetBaseUrl = selectedPrdDocument?.url;
   const selectedDemoUrl = selectedDemoDocument?.url ?? selectedVersion?.demoEntryUrl ?? "";
+  const renderTab = demoDocuments.length === 0 && (tab === "demo" || tab === "split") ? "prd" : tab;
   const selectedVersionLoaded = Boolean(selectedVersion && loadedVersionDetails[selectedVersion.id]);
   const prdThreadCount = prdComments.filter((comment) => !comment.parentId).length;
   const openDiscussionCount = discussions.filter((item) => !item.parentId && item.status !== "closed").length;
@@ -1971,7 +1973,7 @@ export function RequirementWorkspace({
         </aside>
       ) : null}
       <main
-        className={`main-panel ${view === "detail" && tab === "demo" ? "is-demo-view" : ""} ${view === "materials" ? "is-materials-view" : ""} ${prdCommentsOpen && (tab === "prd" || tab === "split") ? "has-prd-comments-panel" : ""}`}
+        className={`main-panel ${view === "detail" && renderTab === "demo" ? "is-demo-view" : ""} ${view === "materials" ? "is-materials-view" : ""} ${prdCommentsOpen && (renderTab === "prd" || renderTab === "split") ? "has-prd-comments-panel" : ""}`}
       >
         {view === "board" ? (
           <RequirementBoard
@@ -2061,43 +2063,43 @@ export function RequirementWorkspace({
                   role="tablist"
                   aria-label="需求内容"
                 >
-                  <button
-                    className={tab === "demo" ? "is-active" : ""}
+                  {demoDocuments.length > 0 ? <button
+                     className={renderTab === "demo" ? "is-active" : ""}
                     onClick={() => selectTab("demo")}
                     role="tab"
-                    aria-selected={tab === "demo"}
+                     aria-selected={renderTab === "demo"}
                   >
                     Demo
-                  </button>
+                  </button> : null}
                   <button
-                    className={tab === "prd" ? "is-active" : ""}
+                     className={renderTab === "prd" ? "is-active" : ""}
                     onClick={() => selectTab("prd")}
                     role="tab"
-                    aria-selected={tab === "prd"}
+                     aria-selected={renderTab === "prd"}
                   >
                     PRD
                   </button>
-                  <button
-                    className={tab === "split" ? "is-active" : ""}
+                  {demoDocuments.length > 0 ? <button
+                     className={renderTab === "split" ? "is-active" : ""}
                     onClick={() => selectTab("split")}
                     role="tab"
-                    aria-selected={tab === "split"}
+                     aria-selected={renderTab === "split"}
                   >
                     Demo+PRD
-                  </button>
+                  </button> : null}
                   <button
-                    className={tab === "test-cases" ? "is-active" : ""}
+                     className={renderTab === "test-cases" ? "is-active" : ""}
                     onClick={() => selectTab("test-cases")}
                     role="tab"
-                    aria-selected={tab === "test-cases"}
+                     aria-selected={renderTab === "test-cases"}
                   >
                     测试用例
                   </button>
                   <button
-                    className={tab === "versions" ? "is-active" : ""}
+                     className={renderTab === "versions" ? "is-active" : ""}
                     onClick={() => selectTab("versions")}
                     role="tab"
-                    aria-selected={tab === "versions"}
+                     aria-selected={renderTab === "versions"}
                   >
                     版本
                   </button>
@@ -2105,8 +2107,8 @@ export function RequirementWorkspace({
                 <div className="header-actions">
                   <button className={`icon-button${discussionsOpen ? " is-active" : ""}`} onClick={() => setDiscussionsOpen((open) => !open)} title={`需求讨论${openDiscussionCount ? `（待处理 ${openDiscussionCount}）` : ""}`} aria-label="打开需求讨论"><Icon name="messages" />{openDiscussionCount ? <b className="prd-comment-count">{openDiscussionCount}</b> : null}</button>
                   {currentUser.canPublish ? <button className="icon-button product-spec-trigger" onClick={() => setProductSpecOpen(true)} title="提取产品规范" aria-label="提取产品规范"><Icon name="sparkles" /></button> : null}
-                  {tab === "prd" || tab === "split" ? <button className={`icon-button${prdCommentMode ? " is-active" : ""}`} onClick={() => { const next = !prdCommentMode; setPrdCommentMode(next); if (next) showCommentModeNotice(); }} title={`PRD 评论${prdThreadCount ? `（${prdThreadCount}）` : ""}`} aria-label="进入 PRD 评论态"><Icon name="message" />{prdThreadCount ? <b className="prd-comment-count">{prdThreadCount}</b> : null}</button> : null}
-                  {tab === "demo" || tab === "split" ? (
+                   {renderTab === "prd" || renderTab === "split" ? <button className={`icon-button${prdCommentMode ? " is-active" : ""}`} onClick={() => { const next = !prdCommentMode; setPrdCommentMode(next); if (next) showCommentModeNotice(); }} title={`PRD 评论${prdThreadCount ? `（${prdThreadCount}）` : ""}`} aria-label="进入 PRD 评论态"><Icon name="message" />{prdThreadCount ? <b className="prd-comment-count">{prdThreadCount}</b> : null}</button> : null}
+                  {demoDocuments.length > 0 && (renderTab === "demo" || renderTab === "split") ? (
                     <a
                       className="icon-button"
                       href={documentDownloadUrl(detail!.requirement.code, selectedVersion!.number, "demo", selectedDemoDocument?.path)}
@@ -2116,7 +2118,7 @@ export function RequirementWorkspace({
                       <Icon name="download" />
                     </a>
                   ) : null}
-                  {tab === "prd" || tab === "split" ? (
+                  {renderTab === "prd" || renderTab === "split" ? (
                     <a
                       className="icon-button"
                       href={documentDownloadUrl(detail!.requirement.code, selectedVersion!.number, "prd", selectedPrdDocument?.path)}
@@ -2219,7 +2221,7 @@ export function RequirementWorkspace({
               </div>
             ) : null}
             {error && <div className="workspace-toast is-error" role="alert">{error}</div>}
-            {tab === "versions" ? (
+            {renderTab === "versions" ? (
               <VersionAssetsPanel
                 requirementCode={detail!.requirement.code}
                 versions={versions}
@@ -2228,16 +2230,16 @@ export function RequirementWorkspace({
                 onSelect={handleSelectVersion}
                 onRestore={(version) => void restoreVersion(version)}
               />
-            ) : tab === "test-cases" ? (
+            ) : renderTab === "test-cases" ? (
               <TestCasesPanel
                 requirementCode={detail!.requirement.code}
                 versionNo={selectedVersion!.number}
               />
-            ) : (tab === "prd" || tab === "split") && !selectedVersionLoaded ? (
+            ) : (renderTab === "prd" || renderTab === "split") && !selectedVersionLoaded ? (
               <section className="content-surface content-loading-state" aria-busy={loadingVersionId === selectedVersion?.id}>
                 <p>{loadingVersionId === selectedVersion?.id ? "正在加载 PRD…" : "当前版本 PRD 暂不可用，请点击刷新重试。"}</p>
               </section>
-            ) : tab === "split" ? (
+            ) : renderTab === "split" ? (
               <section
                 ref={splitContainerRef}
                 className={`content-surface is-split ${draggingSplit ? "is-resizing" : ""}`}
@@ -2317,9 +2319,9 @@ export function RequirementWorkspace({
               </section>
             ) : (
               <section
-                className={`content-surface ${tab === "demo" ? "is-demo" : ""} ${tab === "prd" && prdDocuments.length > 1 ? "has-document-directory" : ""}`}
+                className={`content-surface ${renderTab === "demo" ? "is-demo" : ""} ${renderTab === "prd" && prdDocuments.length > 1 ? "has-document-directory" : ""}`}
               >
-                {tab === "demo" ? (
+                {renderTab === "demo" ? (
                   demoDocuments.length > 1 ? (
                     <div className="document-browser is-demo">
                       <VersionDocumentDirectory
@@ -2376,7 +2378,7 @@ export function RequirementWorkspace({
                 )}
               </section>
             )}
-            {(tab === "prd" || tab === "split") ? <PrdCommentPanel
+            {(renderTab === "prd" || renderTab === "split") ? <PrdCommentPanel
               open={prdCommentsOpen}
               comments={prdComments}
               positions={prdCommentPositions}
