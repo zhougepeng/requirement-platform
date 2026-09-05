@@ -533,9 +533,39 @@ export async function getGlobalSpec() {
   return clone(store.globalSpec ?? emptyGlobalSpec());
 }
 
+function valueRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function productComponentLibrary(globalSpec: ProductSpec, productSpec: ProductSpec) {
+  const byId = new Map<string, ProductSpec["components"][number]>();
+  for (const component of [...globalSpec.components, ...productSpec.components]) {
+    const id = (component.id || component.name).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    if (id) byId.set(id, { ...component, id });
+  }
+  const components = Array.from(byId.values()).slice(0, 30);
+  const globalColors = valueRecord(globalSpec.tokens.color);
+  const productColors = valueRecord(productSpec.tokens.color);
+  const variables = { ...valueRecord(globalColors.cssVariables), ...valueRecord(productColors.cssVariables) };
+  const tokenLines = Object.entries(variables)
+    .filter(([name, value]) => /^[a-zA-Z][\w-]*$/.test(name) && typeof value === "string" && value.trim())
+    .slice(0, 80)
+    .map(([name, value]) => `  --${name}: ${value};`);
+  const tokensCss = `:root {\n${tokenLines.join("\n")}\n}\n`;
+  const componentCss = components.map((component) => component.css || "").filter(Boolean).join("\n\n").slice(0, 24_000);
+  const componentsJs = ["window.ProductComponents = window.ProductComponents || {};", ...components.map((component) => component.code || "").filter(Boolean)].join("\n\n").slice(0, 32_000);
+  const catalog = {
+    version: Math.max(globalSpec.version, productSpec.version),
+    technology: "static-html-css-js",
+    usage: "生成 Demo 时优先使用 catalog 中已有组件；没有匹配项时才新增，并写回候选规范。",
+    components: components.map((component) => ({ id: component.id || component.name, name: component.name, className: component.className, template: component.template, repeatCount: component.repeatCount, states: component.states ?? [], interaction: component.interaction ?? [], sourceRequirementCodes: component.sourceRequirementCodes ?? [] })),
+  };
+  return { tokensCss, componentCss, componentsJs, catalog };
+}
+
 export async function getProductGenerationContext(productId: string) {
   const [spec, globalSpec] = await Promise.all([getProductSpec(productId), getGlobalSpec()]);
-  return clone({ productId, globalSpec, productSpec: spec, rules: spec.rules, prd: spec.prd, tokens: spec.tokens, components: spec.components, demo: spec.demo });
+  return clone({ productId, globalSpec, productSpec: spec, rules: spec.rules, prd: spec.prd, tokens: spec.tokens, components: spec.components, demo: spec.demo, componentLibrary: productComponentLibrary(globalSpec, spec) });
 }
 
 export async function getGenerationContext(input: { requirementId?: string; requirementCode?: string; projectId?: string; productId?: string; type?: "prd" | "demo" }) {
@@ -552,6 +582,7 @@ export async function getGenerationContext(input: { requirementId?: string; requ
     productSpec: productId ? productSpec : null,
     requirementContext: requirement ? { id: requirement.id, code: requirement.code, title: requirement.title, projectId, productId, versionNo: currentVersion?.number, prd: currentVersion?.prd ?? "" } : { projectId, productId },
     effectiveSpecVersions: { global: globalSpec.version, product: productId ? productSpec.version : null },
+    componentLibrary: productComponentLibrary(globalSpec, productSpec),
     type: input.type ?? "demo",
   });
 }

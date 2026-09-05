@@ -80,24 +80,64 @@ function inferDemoTokens(html: string): ProductSpec["tokens"] {
   };
 }
 
+function componentId(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "component";
+}
+
+function cssForClasses(html: string, className: string) {
+  const classes = className.split(/\s+/).map((item) => item.trim()).filter(Boolean);
+  if (!classes.length) return "";
+  const styles = [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map((match) => match[1]).join("\n");
+  return styles.split("}").filter((rule) => classes.some((name) => rule.includes(`.${name}`))).map((rule) => `${rule.trim()}}`).filter(Boolean).join("\n").slice(0, 4_000);
+}
+
+function componentTemplate(tag: string, className: string) {
+  const classes = className ? ` class="${className}"` : "";
+  if (tag === "input") return `<input${classes} placeholder="{{placeholder}}">`;
+  if (tag === "select") return `<select${classes}>{{options}}</select>`;
+  if (tag === "table") return `<table${classes}>{{rows}}</table>`;
+  return `<${tag}${classes}>{{content}}</${tag}>`;
+}
+
+function componentFactoryCode(id: string, tag: string, className: string) {
+  const key = componentId(id).replace(/-([a-z0-9])/g, (_, value) => value.toUpperCase());
+  const fallbackClass = JSON.stringify(className);
+  const sourceTag = JSON.stringify(tag);
+  return `ProductComponents.${key} = ({ content = "", className = "", attributes = {} } = {}) => {\n  const element = document.createElement(${sourceTag});\n  element.className = [${fallbackClass}, className].filter(Boolean).join(" ");\n  for (const [name, value] of Object.entries(attributes)) {\n    if (value !== undefined && value !== null) element.setAttribute(name, String(value));\n  }\n  if (${sourceTag} !== "input") element.textContent = String(content);\n  return element;\n};`;
+}
+
 function inferDemoComponents(html: string, requirementCode: string): ProductSpecComponent[] {
   if (!html) return [];
-  const definitions: Array<[string, RegExp, string]> = [
-    ["Button", /<button\b|\bbutton\b|role\s*=\s*["']button["']/i, "页面操作、提交和导航操作"],
-    ["Input", /<input\b|<textarea\b|contenteditable\s*=\s*["']true["']/i, "文本、编号或多行内容输入"],
-    ["Select", /<select\b|role\s*=\s*["']combobox["']/i, "枚举项选择和筛选"],
-    ["Dialog", /<dialog\b|role\s*=\s*["']dialog["']|modal|modal-mask/i, "承载确认、导入或编辑流程的弹窗"],
-    ["Table", /<table\b|role\s*=\s*["']table["']/i, "结构化列表、明细和结果展示"],
-    ["Tabs", /\btablist\b|\btab\b|class\s*=\s*["'][^"']*\btab(?:s)?\b/i, "同一页面内的模块切换"],
-    ["Card", /class\s*=\s*["'][^"']*(?:card|panel|pane)[^"']*["']/i, "分组展示指标或业务内容"],
+  const definitions: Array<{ id: string; name: string; tag: string; usage: string; expression: RegExp }> = [
+    { id: "button", name: "Button", tag: "button", usage: "页面操作、提交和导航操作", expression: /<button\b[^>]*>[\s\S]*?<\/button>/gi },
+    { id: "input", name: "Input", tag: "input", usage: "文本、编号或多行内容输入", expression: /<(?:input|textarea)\b[^>]*>(?:[\s\S]*?<\/textarea>)?/gi },
+    { id: "select", name: "Select", tag: "select", usage: "枚举项选择和筛选", expression: /<select\b[^>]*>[\s\S]*?<\/select>/gi },
+    { id: "table", name: "Table", tag: "table", usage: "结构化列表、明细和结果展示", expression: /<table\b[^>]*>[\s\S]*?<\/table>/gi },
+    { id: "tabs", name: "Tabs", tag: "div", usage: "同一页面内的模块切换", expression: /<[^>]+class\s*=\s*["'][^"']*\btab(?:s)?\b[^"']*["'][^>]*>/gi },
+    { id: "panel", name: "Panel", tag: "section", usage: "分组展示指标或业务内容", expression: /<[^>]+class\s*=\s*["'][^"']*(?:card|panel|pane)[^"']*["'][^>]*>/gi },
   ];
-  return definitions.filter(([, pattern]) => pattern.test(html)).map(([name, , usage]) => ({
-    name,
-    usage,
-    states: ["default", "hover", "disabled"],
-    interaction: name === "Button" || name === "Tabs" ? ["点击后更新当前状态或内容"] : [],
-    sourceRequirementCodes: [requirementCode],
-  }));
+  return definitions.flatMap((definition) => {
+    const matches = Array.from(html.matchAll(definition.expression), (match) => match[0]);
+    if (matches.length < 2) return [];
+    const sample = matches[0];
+    const tag = /^<textarea\b/i.test(sample) ? "textarea" : definition.tag;
+    const className = /\bclass\s*=\s*["']([^"']+)["']/i.exec(sample)?.[1]?.trim() || "";
+    const css = cssForClasses(html, className);
+    return [{
+      id: definition.id,
+      name: definition.name,
+      usage: definition.usage,
+      className: className || undefined,
+      template: componentTemplate(tag, className),
+      css: css || undefined,
+      repeatCount: matches.length,
+      style: { sourceTag: tag, className, repeatCount: matches.length },
+      states: ["default", "hover", "disabled"],
+      interaction: definition.id === "button" || definition.id === "tabs" ? ["点击后更新当前状态或内容"] : [],
+      code: componentFactoryCode(definition.id, tag, className),
+      sourceRequirementCodes: [requirementCode],
+    } satisfies ProductSpecComponent];
+  });
 }
 
 function compactTestCases(testCases: Array<{ title: string; module: string; type: string; steps: unknown; expectedResults: unknown }>) {
@@ -151,8 +191,13 @@ function components(value: unknown, requirementCode: string, fallback: ProductSp
     const usage = typeof item?.usage === "string" ? item.usage.trim().slice(0, 500) : "";
     if (!name || !usage) return [];
     return [{
+      id: typeof item.id === "string" ? componentId(item.id) : componentId(name),
       name,
       usage,
+      className: typeof item.className === "string" ? item.className.trim().slice(0, 300) : undefined,
+      template: typeof item.template === "string" ? item.template.slice(0, 4_000) : undefined,
+      css: typeof item.css === "string" ? item.css.slice(0, 8_000) : undefined,
+      repeatCount: typeof item.repeatCount === "number" ? Math.max(0, Math.min(999, Math.trunc(item.repeatCount))) : undefined,
       avoid: typeof item.avoid === "string" ? item.avoid.trim().slice(0, 400) : undefined,
       style: record(item.style) ?? undefined,
       states: strings(item.states, 12),
@@ -161,7 +206,22 @@ function components(value: unknown, requirementCode: string, fallback: ProductSp
       sourceRequirementCodes: [requirementCode],
     } satisfies ProductSpecComponent];
   }).slice(0, 40);
-  return parsed.length ? parsed : fallback;
+  if (!parsed.length) return fallback;
+  const inferredById = new Map(fallback.map((component) => [componentId(component.id || component.name), component]));
+  return parsed.map((component) => {
+    const inferred = inferredById.get(componentId(component.id || component.name));
+    if (!inferred) return component;
+    return {
+      ...inferred,
+      ...component,
+      className: component.className || inferred.className,
+      template: component.template || inferred.template,
+      css: component.css || inferred.css,
+      repeatCount: component.repeatCount ?? inferred.repeatCount,
+      code: component.code || inferred.code,
+      sourceRequirementCodes: Array.from(new Set([...(inferred.sourceRequirementCodes ?? []), ...(component.sourceRequirementCodes ?? [])])),
+    } satisfies ProductSpecComponent;
+  });
 }
 
 const categories = new Set<ProductSpecEntry["category"]>(["prd", "token", "component", "layout", "interaction", "template", "demo", "terminology", "business_rule"]);
@@ -227,7 +287,7 @@ function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode:
 export async function extractProductSpecWithModel(requirementCode: string, productId: string) {
   const context = await getProductSpecExtractionContext(requirementCode, productId);
   const { baseUrl, apiKey, model, reasoningEffort } = await resolveAssistantModel();
-  const systemPrompt = "你是产品规范提取助手。先以程序分析结果为事实基础，再理解 PRD、Demo HTML/CSS/DOM 和测试用例。只沉淀同一产品未来需求仍可复用的规则；一次性业务逻辑、临时数据和未经证实的推测不得写入规范。只输出一个完整、严格合法的 JSON 对象，不要输出 Markdown、代码围栏、解释或前后缀文字：{spec:{entries:[{category:\"prd|token|component|layout|interaction|template|demo|terminology|business_rule\",scope:\"global|product\",title,description,structuredData,level:\"must|should|forbid\",evidence:[{sourceType,path,selector,excerpt}],confidence}],rules:{terminology:string[],businessConstraints:string[],copywriting:string[]},prd:{structure:string[],writingRules:string[]},tokens:object,components:[{name,usage,avoid,style,states:string[],interaction:string[],code}],demo:{layoutPrinciples:string[],componentReuseRules:string[],interactionRequirements:string[],constraints:string[]}}}。公共规范只记录跨产品可复用规则；产品规范只记录当前产品专属规则。每条 entries 必须有 title、description、category、scope、level；没有可靠证据的字段返回空数组或空对象。组件必须说明使用场景。";
+  const systemPrompt = "你是产品规范提取助手。先以程序分析结果为事实基础，再理解 PRD、Demo HTML/CSS/DOM 和测试用例。只沉淀同一产品未来需求仍可复用的规则；一次性业务逻辑、临时数据和未经证实的推测不得写入规范。只输出一个完整、严格合法的 JSON 对象，不要输出 Markdown、代码围栏、解释或前后缀文字：{spec:{entries:[{category:\"prd|token|component|layout|interaction|template|demo|terminology|business_rule\",scope:\"global|product\",title,description,structuredData,level:\"must|should|forbid\",evidence:[{sourceType,path,selector,excerpt}],confidence}],rules:{terminology:string[],businessConstraints:string[],copywriting:string[]},prd:{structure:string[],writingRules:string[]},tokens:object,components:[{id,name,usage,className,template,css,repeatCount,avoid,style,states:string[],interaction:string[],code}],demo:{layoutPrinciples:string[],componentReuseRules:string[],interactionRequirements:string[],constraints:string[]}}}。公共规范只记录跨产品可复用规则；产品规范只记录当前产品专属规则。每条 entries 必须有 title、description、category、scope、level；没有可靠证据的字段返回空数组或空对象。组件必须说明使用场景。对于重复出现且样式稳定的组件，必须返回稳定 id、className、可参数化 template、CSS 片段和可直接放入 components.js 的原生 JavaScript code；不要把一次性业务区域抽成组件。";
   const userPrompt = `需求：${context.requirement.title}（${context.requirement.code}）\n版本：V${context.version.number}\n变更：${context.version.changeSummary || "无"}\n\n程序分析结果（这是可验证事实，已覆盖完整 Demo）：\n${JSON.stringify(context.programSpec)}\n\nPRD：\n${bounded(context.prd, 16_000)}\n\nDemo 页面分析：\n${bounded(context.demoSummary.summary, 3_000)}\n可用 data-demo-id：${context.demoSummary.demoIds.join(",") || "无"}\n\n从 Demo HTML/CSS/DOM 中抽取的证据：\n${demoEvidence(context.demoHtml)}\n\n测试用例（辅助理解，不得把测试步骤误写为产品规则）：\n${JSON.stringify(compactTestCases(context.testCases))}`;
   async function requestCompletion(prompt: string, lowReasoning = false) {
     let response: Response;

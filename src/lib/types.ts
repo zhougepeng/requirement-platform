@@ -203,8 +203,14 @@ export type ProjectProduct = {
 };
 
 export type ProductSpecComponent = {
+  /** Stable product-scoped key used by generation and the component catalog. */
+  id?: string;
   name: string;
   usage: string;
+  className?: string;
+  template?: string;
+  css?: string;
+  repeatCount?: number;
   avoid?: string;
   style?: Record<string, unknown>;
   states?: string[];

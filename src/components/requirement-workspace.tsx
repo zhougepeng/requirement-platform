@@ -62,6 +62,21 @@ type ProjectContextMenu = {
   x: number;
   y: number;
 } | null;
+const WORKBUDDY_URL_KEY = "requirement-platform:feature-ingress:workbuddy-url:v1";
+
+function normalizeWorkbenchUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("请输入工作搭子网址。");
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("请输入完整网址，例如 https://workbuddy.example.com。");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+    throw new Error("工作搭子网址必须使用 http 或 https。");
+  return parsed.toString().replace(/\/$/, "");
+}
 type RequirementTimelineGroup = {
   key: string;
   label: string;
@@ -998,6 +1013,10 @@ export function RequirementWorkspace({
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [projectDialogSession, setProjectDialogSession] = useState(0);
+  const [workbuddyUrl, setWorkbuddyUrl] = useState("");
+  const [workbuddyUrlDraft, setWorkbuddyUrlDraft] = useState("");
+  const [workbuddySettingsOpen, setWorkbuddySettingsOpen] = useState(false);
+  const [workbuddyUrlError, setWorkbuddyUrlError] = useState("");
   const [projectContextMenu, setProjectContextMenu] =
     useState<ProjectContextMenu>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
@@ -1006,6 +1025,42 @@ export function RequirementWorkspace({
     setSelectedPrdDocumentId("");
     setSelectedDemoDocumentId("");
   }, []);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(WORKBUDDY_URL_KEY) || "";
+    const timer = window.setTimeout(() => setWorkbuddyUrl(stored), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const openWorkbuddy = useCallback(() => {
+    if (!workbuddyUrl) {
+      setWorkbuddyUrlDraft("");
+      setWorkbuddyUrlError("");
+      setWorkbuddySettingsOpen(true);
+      return;
+    }
+    window.open(workbuddyUrl, "_blank", "noopener,noreferrer");
+  }, [workbuddyUrl]);
+
+  const openWorkbuddySettings = useCallback(() => {
+    setWorkbuddyUrlDraft(workbuddyUrl);
+    setWorkbuddyUrlError("");
+    setWorkbuddySettingsOpen(true);
+    setProfileMenuOpen(false);
+  }, [workbuddyUrl]);
+
+  const saveWorkbuddyUrl = useCallback(() => {
+    try {
+      const normalized = normalizeWorkbenchUrl(workbuddyUrlDraft);
+      window.localStorage.setItem(WORKBUDDY_URL_KEY, normalized);
+      setWorkbuddyUrl(normalized);
+      setWorkbuddySettingsOpen(false);
+      setWorkbuddyUrlError("");
+      window.open(normalized, "_blank", "noopener,noreferrer");
+    } catch (reason) {
+      setWorkbuddyUrlError(reason instanceof Error ? reason.message : "网址格式不正确。");
+    }
+  }, [workbuddyUrlDraft]);
 
   const selectedVersion = useMemo(
     () =>
@@ -1728,6 +1783,12 @@ export function RequirementWorkspace({
                 <span>我的需求</span>
               </button>
             ) : null}
+            <div className="nav-caption">功能入库</div>
+            <button className="nav-item feature-ingress-item" onClick={openWorkbuddy} title="打开工作搭子">
+              <Icon name="external" />
+              <span>工作搭子</span>
+              <Icon name="chevron" />
+            </button>
             <button
               className={`nav-item ${view === "materials" ? "is-selected" : ""}`}
               onClick={() => setView("materials")}
@@ -1913,6 +1974,12 @@ export function RequirementWorkspace({
                     >
                       <span>显示已作废项目和需求</span>
                       {showArchived ? <Icon name="check" /> : null}
+                    </button>
+                    <button
+                      role="menuitem"
+                      onClick={openWorkbuddySettings}
+                    >
+                      <span>工作搭子设置</span>
                     </button>
                     {currentUser.isAdmin ? (
                       <>
@@ -2406,6 +2473,37 @@ export function RequirementWorkspace({
           </>
         )}
       </main>
+      {workbuddySettingsOpen ? (
+        <div className="project-dialog-layer">
+          <button
+            className="project-dialog-backdrop"
+            aria-label="关闭工作搭子设置"
+            onClick={() => setWorkbuddySettingsOpen(false)}
+          />
+          <section className="project-dialog feature-ingress-dialog" role="dialog" aria-modal="true" aria-labelledby="workbuddy-settings-title">
+            <header>
+              <div>
+                <span className="project-dialog-kicker">功能入库</span>
+                <h2 id="workbuddy-settings-title">工作搭子</h2>
+                <p>打开后会在新页面进入工作搭子；两个系统使用同一套飞书登录。</p>
+              </div>
+              <button className="project-dialog-close" onClick={() => setWorkbuddySettingsOpen(false)} aria-label="关闭工作搭子设置"><Icon name="close" /></button>
+            </header>
+            <div className="project-dialog-body">
+              <label>
+                工作搭子网址
+                <input value={workbuddyUrlDraft} onChange={(event) => { setWorkbuddyUrlDraft(event.target.value); setWorkbuddyUrlError(""); }} placeholder="https://workbuddy.example.com" autoFocus />
+              </label>
+              <p className="project-dialog-hint">首次配置后，点击左侧“工作搭子”会直接打开；如果工作搭子未登录，将由飞书完成统一登录。</p>
+              {workbuddyUrlError ? <p className="project-dialog-error" role="alert">{workbuddyUrlError}</p> : null}
+            </div>
+            <footer>
+              <button className="project-dialog-cancel" onClick={() => setWorkbuddySettingsOpen(false)}>取消</button>
+              <button className="project-dialog-save" onClick={saveWorkbuddyUrl}>保存并打开</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
       <RequirementAssistant
         key={
           view === "detail" && detail && selectedVersion
