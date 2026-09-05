@@ -59,6 +59,8 @@ AUTH_COOKIE_SECURE=false
 
 `AUTH_COOKIE_SECURE=false` 仅用于 HTTP IP 的短期调试，否则浏览器不会保存带 Secure 标记的登录 Cookie。该方式的网络传输没有 HTTPS 保护，拿到域名后应改为 `https://域名/auth/callback` 并删除此配置。
 
+如需从需求库一键进入工作搭子且不重复扫码，在两个服务的环境文件中配置相同的 `WORKBUDDY_SSO_SECRET`（至少 32 位随机值）。需求库只会为当前已登录员工生成 60 秒有效、一次性使用的签名跳转票据；工作搭子验证后创建自己的登录 Session，不共享浏览器 Cookie。
+
 ## 4. 登录流程与安全边界
 
 1. 未登录访问页面会被统一跳转到 `/login`；接口返回 401。

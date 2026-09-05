@@ -1032,6 +1032,19 @@ export function RequirementWorkspace({
     return () => window.clearTimeout(timer);
   }, []);
 
+  const openWorkbuddyWithSso = useCallback(async (targetUrl: string) => {
+    const popup = window.open("about:blank", "_blank");
+    try {
+      const result = await request<{ url: string }>(`/api/auth/workbuddy?workbuddyUrl=${encodeURIComponent(targetUrl)}`);
+      if (popup && !popup.closed) popup.location.href = result.url;
+      else window.location.href = result.url;
+    } catch (reason) {
+      popup?.close();
+      setWorkbuddyUrlError(reason instanceof Error ? reason.message : "无法进入工作搭子。请稍后重试。");
+      setWorkbuddySettingsOpen(true);
+    }
+  }, []);
+
   const openWorkbuddy = useCallback(() => {
     if (!workbuddyUrl) {
       setWorkbuddyUrlDraft("");
@@ -1039,8 +1052,8 @@ export function RequirementWorkspace({
       setWorkbuddySettingsOpen(true);
       return;
     }
-    window.open(workbuddyUrl, "_blank", "noopener,noreferrer");
-  }, [workbuddyUrl]);
+    void openWorkbuddyWithSso(workbuddyUrl);
+  }, [openWorkbuddyWithSso, workbuddyUrl]);
 
   const openWorkbuddySettings = useCallback(() => {
     setWorkbuddyUrlDraft(workbuddyUrl);
@@ -1056,11 +1069,11 @@ export function RequirementWorkspace({
       setWorkbuddyUrl(normalized);
       setWorkbuddySettingsOpen(false);
       setWorkbuddyUrlError("");
-      window.open(normalized, "_blank", "noopener,noreferrer");
+      void openWorkbuddyWithSso(normalized);
     } catch (reason) {
       setWorkbuddyUrlError(reason instanceof Error ? reason.message : "网址格式不正确。");
     }
-  }, [workbuddyUrlDraft]);
+  }, [openWorkbuddyWithSso, workbuddyUrlDraft]);
 
   const selectedVersion = useMemo(
     () =>
@@ -2494,7 +2507,7 @@ export function RequirementWorkspace({
                 工作搭子网址
                 <input value={workbuddyUrlDraft} onChange={(event) => { setWorkbuddyUrlDraft(event.target.value); setWorkbuddyUrlError(""); }} placeholder="https://workbuddy.example.com" autoFocus />
               </label>
-              <p className="project-dialog-hint">首次配置后，点击左侧“工作搭子”会直接打开；如果工作搭子未登录，将由飞书完成统一登录。</p>
+              <p className="project-dialog-hint">首次配置后，点击左侧“工作搭子”会直接打开；已登录需求库时不会再次扫码，工作搭子仍保留独立登录入口。</p>
               {workbuddyUrlError ? <p className="project-dialog-error" role="alert">{workbuddyUrlError}</p> : null}
             </div>
             <footer>
