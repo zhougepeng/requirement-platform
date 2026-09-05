@@ -19,6 +19,8 @@ export type InstallerUpdateStatus = {
   currentVersion: string;
   latestVersion: string;
   installerName: string;
+  installerUrl: string;
+  environment: "linux" | "local";
   updateAvailable: boolean;
   canInstall: boolean;
   blockedReason?: string;
@@ -68,7 +70,7 @@ async function latestRelease() {
   const version = release.tag_name?.trim();
   const asset = release.assets?.find((item) => item.name === INSTALLER_NAME);
   if (!version || !asset?.browser_download_url) throw new Error("最新 GitHub Release 未包含 Linux 安装包。");
-  return { version };
+  return { version, installerUrl: asset.browser_download_url };
 }
 
 function updaterAvailable() {
@@ -84,8 +86,9 @@ function updaterAvailable() {
 export async function checkInstallerUpdate(): Promise<InstallerUpdateStatus> {
   const [current, release] = await Promise.all([Promise.resolve(currentVersion()), latestRelease()]);
   const updateAvailable = hasNewerVersion(current, release.version);
-  const blockedReason = process.platform !== "linux"
-    ? "自动安装包更新仅支持已安装的 Linux 服务器。"
+  const localEnvironment = process.platform !== "linux";
+  const blockedReason = localEnvironment
+    ? "当前是本地开发环境，不能自动安装 Linux 服务包；可下载后在 Linux 服务器手动安装。"
     : !updaterAvailable()
       ? "当前安装包尚未包含自动更新助手；请先手动安装一次最新安装包，之后即可在页面内自动更新。"
       : undefined;
@@ -93,6 +96,8 @@ export async function checkInstallerUpdate(): Promise<InstallerUpdateStatus> {
     currentVersion: current,
     latestVersion: release.version,
     installerName: INSTALLER_NAME,
+    installerUrl: release.installerUrl,
+    environment: localEnvironment ? "local" : "linux",
     updateAvailable,
     canInstall: updateAvailable && !blockedReason,
     blockedReason,

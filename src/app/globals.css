@@ -206,6 +206,8 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 .github-update-available { color:#175cd3; background:#eff6ff; }
 .github-update-success { color:#175cd3; background:#eff6ff; }
 .github-update-note { margin:0; color:#98a2b3; font-size:11px; line-height:1.55; }
+.github-update-download { display:inline-flex; width:max-content; color:#175cd3; font-size:12px; text-decoration:none; }
+.github-update-download:hover { text-decoration:underline; }
 .github-update-footer { display:flex; align-items:center; justify-content:flex-end; gap:8px; border-top:1px solid #eaecf0; padding:12px 18px; }
 .github-update-footer .model-cancel,.github-update-footer .model-save { display:inline-flex; align-items:center; gap:5px; }
 .github-update-footer svg { width:14px; height:14px; }

@@ -7,6 +7,8 @@ type UpdateStatus = {
   currentVersion: string;
   latestVersion: string;
   installerName: string;
+  installerUrl: string;
+  environment: "linux" | "local";
   updateAvailable: boolean;
   canInstall: boolean;
   blockedReason?: string;
@@ -88,7 +90,8 @@ export function GithubUpdateManager({ initialOpen = false, hideTrigger = false, 
         {!loading && status ? <div className="github-update-status">
           <div><span>当前版本</span><code>{status.currentVersion}</code></div><div><span>最新安装包</span><code>{status.latestVersion}</code></div>
           {complete ? <p className="github-update-success">更新任务已启动。安装完成后服务会自动重启；页面可能暂时断开，请稍后刷新。</p> : status.updateAvailable ? <p className="github-update-available">发现新版安装包：{status.installerName}。</p> : <p className="github-update-current">当前已经是最新安装包版本。</p>}
-          {status.updateAvailable && status.blockedReason ? <p className="model-manager-error">{status.blockedReason}</p> : null}
+          {status.updateAvailable && status.blockedReason ? <p className={status.environment === "local" ? "github-update-note" : "model-manager-error"}>{status.blockedReason}</p> : null}
+          {status.updateAvailable && status.environment === "local" && status.installerUrl ? <a className="github-update-download" href={status.installerUrl} target="_blank" rel="noreferrer">下载 Linux 安装包</a> : null}
         </div> : null}
       </div>
       <footer className="github-update-footer"><button className="model-cancel" onClick={close}>关闭</button><button className="model-cancel" disabled={loading || pulling} onClick={() => void check()}><Icon name="refresh" />重新检查</button>{status?.canInstall && !complete ? <button className="model-save" disabled={pulling} onClick={() => void install()}>{pulling ? "正在启动更新…" : "下载并更新"}</button> : null}</footer>
