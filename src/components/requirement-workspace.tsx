@@ -1020,6 +1020,7 @@ export function RequirementWorkspace({
   const [projectContextMenu, setProjectContextMenu] =
     useState<ProjectContextMenu>(null);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const autoLoadedVersionIdRef = useRef<string | null>(null);
   const selectVersion = useCallback((versionId: string) => {
     setSelectedVersionId(versionId);
     setSelectedPrdDocumentId("");
@@ -1152,6 +1153,14 @@ export function RequirementWorkspace({
       setLoadingVersionId((current) => current === selectedVersion.id ? null : current);
     }
   }, [detail, loadedVersionDetails, loadingVersionId, selectedVersion]);
+
+  useEffect(() => {
+    if (!detail || !selectedVersion || selectedVersionLoaded) return;
+    if (renderTab !== "prd" && renderTab !== "split") return;
+    if (autoLoadedVersionIdRef.current === selectedVersion.id) return;
+    autoLoadedVersionIdRef.current = selectedVersion.id;
+    void loadSelectedVersionDetail();
+  }, [detail, loadSelectedVersionDetail, renderTab, selectedVersion, selectedVersionLoaded]);
 
   const selectTab = useCallback((nextTab: Tab) => {
     setTab(nextTab);

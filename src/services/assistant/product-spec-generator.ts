@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { ProductSpec, ProductSpecComponent, ProductSpecEntry, ProductSpecEvidence } from "@/lib/types";
-import { reasoningEffortPayload, resolveAssistantModel } from "@/services/assistant/model-config";
+import { resolveAssistantModel } from "@/services/assistant/model-config";
 import { extractProductSpec, getProductSpecExtractionContext } from "@/services/requirement/repository";
 
 type JsonRecord = Record<string, unknown>;
@@ -286,7 +286,7 @@ function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode:
 
 export async function extractProductSpecWithModel(requirementCode: string, productId: string) {
   const context = await getProductSpecExtractionContext(requirementCode, productId);
-  const { baseUrl, apiKey, model, reasoningEffort } = await resolveAssistantModel();
+  const { baseUrl, apiKey, model } = await resolveAssistantModel();
   const systemPrompt = "你是产品规范提取助手。先以程序分析结果为事实基础，再理解 PRD、Demo HTML/CSS/DOM 和测试用例。只沉淀同一产品未来需求仍可复用的规则；一次性业务逻辑、临时数据和未经证实的推测不得写入规范。只输出一个完整、严格合法的 JSON 对象，不要输出 Markdown、代码围栏、解释或前后缀文字：{spec:{entries:[{category:\"prd|token|component|layout|interaction|template|demo|terminology|business_rule\",scope:\"global|product\",title,description,structuredData,level:\"must|should|forbid\",evidence:[{sourceType,path,selector,excerpt}],confidence}],rules:{terminology:string[],businessConstraints:string[],copywriting:string[]},prd:{structure:string[],writingRules:string[]},tokens:object,components:[{id,name,usage,className,template,css,repeatCount,avoid,style,states:string[],interaction:string[],code}],demo:{layoutPrinciples:string[],componentReuseRules:string[],interactionRequirements:string[],constraints:string[]}}}。公共规范只记录跨产品可复用规则；产品规范只记录当前产品专属规则。每条 entries 必须有 title、description、category、scope、level；没有可靠证据的字段返回空数组或空对象。组件必须说明使用场景。对于重复出现且样式稳定的组件，必须返回稳定 id、className、可参数化 template、CSS 片段和可直接放入 components.js 的原生 JavaScript code；不要把一次性业务区域抽成组件。";
   const userPrompt = `需求：${context.requirement.title}（${context.requirement.code}）\n版本：V${context.version.number}\n变更：${context.version.changeSummary || "无"}\n\n程序分析结果（这是可验证事实，已覆盖完整 Demo）：\n${JSON.stringify(context.programSpec)}\n\nPRD：\n${bounded(context.prd, 16_000)}\n\nDemo 页面分析：\n${bounded(context.demoSummary.summary, 3_000)}\n可用 data-demo-id：${context.demoSummary.demoIds.join(",") || "无"}\n\n从 Demo HTML/CSS/DOM 中抽取的证据：\n${demoEvidence(context.demoHtml)}\n\n测试用例（辅助理解，不得把测试步骤误写为产品规则）：\n${JSON.stringify(compactTestCases(context.testCases))}`;
   async function requestCompletion(prompt: string, lowReasoning = false) {
@@ -300,8 +300,15 @@ export async function extractProductSpecWithModel(requirementCode: string, produ
         body: JSON.stringify({
           model,
           temperature: 0,
-          max_tokens: lowReasoning ? 4_000 : 9_000,
-          ...reasoningEffortPayload(lowReasoning ? "low" : reasoningEffort),
+          // The compact retry still needs enough room for the schema, but the
+          // normal request should not be allowed to spend the whole response
+          // budget on component source snippets.
+          max_tokens: lowReasoning ? 6_000 : 9_000,
+          // DeepSeek V4 enables thinking by default. This extraction must
+          // reserve the output budget for the strict JSON payload itself;
+          // otherwise hidden reasoning can consume the whole response and
+          // leave an unterminated JSON document.
+          thinking: { type: "disabled" },
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: systemPrompt },
@@ -323,6 +330,25 @@ export async function extractProductSpecWithModel(requirementCode: string, produ
     }
   }
 
+  const compactRetryPrompt = `请只输出一个完整、严格合法的 JSON 对象，不要 Markdown、代码围栏、解释或前后缀文字。不要展开推理；只保留有证据且可复用的产品规范。控制输出规模：entries 最多 24 条、components 最多 12 个，每条 description 不超过 500 字，template/css/code 各不超过 1,500 字；没有证据的字段使用空数组或空对象。
+
+需求：${context.requirement.title}（${context.requirement.code}）
+
+程序分析结果（优先级最高）：
+${JSON.stringify(context.programSpec)}
+
+PRD：
+${bounded(context.prd, 8_000)}
+
+Demo 分析：
+${bounded(context.demoSummary.summary, 1_500)}
+
+CSS/DOM 样本：
+${bounded(demoEvidence(context.demoHtml), 2_500)}
+
+测试用例（仅辅助理解）：
+${JSON.stringify(compactTestCases(context.testCases))}`;
+
   let parsed: JsonRecord;
   try {
     let payload = await requestCompletion(userPrompt);
@@ -330,9 +356,8 @@ export async function extractProductSpecWithModel(requirementCode: string, produ
     if (!content) {
       const summary = modelResponseSummary(payload);
       if (summary.finishReason === "length") {
-        const retryPrompt = `请直接输出最终 JSON，不要展示或展开推理过程。以下是已由程序完整分析 Demo 后得到的核心证据；仅提炼可复用规范。\n\n需求：${context.requirement.title}（${context.requirement.code}）\n\n程序分析结果：\n${JSON.stringify(context.programSpec)}\n\nPRD：\n${bounded(context.prd, 8_000)}\n\nDemo 分析：\n${bounded(context.demoSummary.summary, 1_500)}\n\nCSS/DOM 样本：\n${bounded(demoEvidence(context.demoHtml), 2_500)}`;
         console.warn("[product-spec-generator]", JSON.stringify({ requirementCode, productId, stage: "retry_with_compact_context", ...summary }));
-        payload = await requestCompletion(retryPrompt, true);
+        payload = await requestCompletion(compactRetryPrompt, true);
         content = contentOf(payload);
       }
       if (!content) {
@@ -340,8 +365,41 @@ export async function extractProductSpecWithModel(requirementCode: string, produ
         throw new Error("AI 分析过程未生成最终规范。请稍后重试，或在模型管理中切换响应更快的模型。");
       }
     }
-    parsed = parseJson(content);
+    try {
+      parsed = parseJson(content);
+    } catch (error) {
+      // A response can contain text but still be unusable: the provider may
+      // have appended an explanation, emitted a fenced block, or truncated
+      // the JSON after hitting its output limit. Retry once with a smaller,
+      // explicit contract instead of surfacing a misleading parse error.
+      const summary = modelResponseSummary(payload);
+      console.warn("[product-spec-generator]", JSON.stringify({
+        requirementCode,
+        productId,
+        stage: "retry_after_invalid_model_json",
+        error: error instanceof Error ? error.message : "invalid_json",
+        ...summary,
+      }));
+      const retryPayload = await requestCompletion(compactRetryPrompt, true);
+      const retryContent = contentOf(retryPayload);
+      if (!retryContent) {
+        throw new Error("AI 分析未返回完整规范，请稍后重试。");
+      }
+      try {
+        parsed = parseJson(retryContent);
+      } catch (retryError) {
+        console.warn("[product-spec-generator]", JSON.stringify({
+          requirementCode,
+          productId,
+          stage: "invalid_model_json_after_retry",
+          error: retryError instanceof Error ? retryError.message : "invalid_json",
+          ...modelResponseSummary(retryPayload),
+        }));
+        throw new Error("AI 返回的规范格式不完整，请稍后重试；如果持续失败，请切换模型。");
+      }
+    }
   } catch (error) {
+    if (error instanceof ProductSpecModelError) throw error;
     throw new ProductSpecModelError(error instanceof Error ? error.message : "AI 规范解析失败。", 422);
   }
   return extractProductSpec(requirementCode, productId, normalizeSpec(parsed, context.programSpec, requirementCode, context.demoHtml));
