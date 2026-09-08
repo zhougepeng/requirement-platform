@@ -29,10 +29,28 @@ export async function GET(request: Request, { params }: { params: Promise<{ segm
   if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === ".." || /[\\/]/.test(segment))) {
     return new Response("Not found", { status: 404 });
   }
-  const filePath = path.resolve(PUBLISHED_DEMO_DIR, ...segments);
-  if (!filePath.startsWith(`${PUBLISHED_DEMO_DIR}${path.sep}`)) return new Response("Not found", { status: 404 });
+  const requestedPath = path.resolve(PUBLISHED_DEMO_DIR, ...segments);
+  if (!requestedPath.startsWith(`${PUBLISHED_DEMO_DIR}${path.sep}`)) return new Response("Not found", { status: 404 });
+  // Snapshot document links use vN/demo/... while older static publishes were
+  // materialized at vN/... only. Keep both layouts readable during migration.
+  const candidates = [requestedPath];
+  if (segments[3]?.toLowerCase() === "demo") {
+    const legacySegments = [...segments.slice(0, 3), ...segments.slice(4)];
+    const legacyPath = path.resolve(PUBLISHED_DEMO_DIR, ...legacySegments);
+    if (legacyPath.startsWith(`${PUBLISHED_DEMO_DIR}${path.sep}`)) candidates.push(legacyPath);
+  }
   try {
-    const body = await readFile(filePath);
+    let filePath = "";
+    let body: ArrayBuffer | undefined;
+    for (const candidate of candidates) {
+      try {
+        const source = await readFile(candidate);
+        body = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength) as ArrayBuffer;
+        filePath = candidate;
+        break;
+      } catch {}
+    }
+    if (!body || !filePath) return new Response("Not found", { status: 404 });
     const contentType = MIME[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
     const headers = new Headers({ "Content-Type": contentType, "X-Content-Type-Options": "nosniff" });
     // Demo pages are served from this same route, so their relative images,

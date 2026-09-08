@@ -275,7 +275,7 @@ async function writeStore(store: RequirementStore) {
   await rename(temp, STORE_FILE);
 }
 
-async function publishArtifactFiles(artifact: DemoArtifact, projectCode: string, requirementCode: string, versionNo: number, runtime?: RequirementRuntime) {
+async function publishArtifactFiles(artifact: DemoArtifact, projectCode: string, requirementCode: string, versionNo: number) {
   safeSegment(projectCode, "项目编码");
   safeSegment(requirementCode, "需求编码");
   const artifactRoot = path.join(ARTIFACT_DIR, artifact.id);
@@ -284,10 +284,11 @@ async function publishArtifactFiles(artifact: DemoArtifact, projectCode: string,
   await stat(source);
   await mkdir(destination, { recursive: true });
   await cp(artifactRoot, destination, { recursive: true, force: true });
-  // Legacy artifact uploads are stored at the version root for static HTML.
-  // Runtime snapshots use a demo/ working directory, so mirror the trusted
-  // artifact there only when the explicit runtime contract is present.
-  if (runtime) await cp(artifactRoot, path.join(destination, "demo"), { recursive: true, force: true });
+  // Keep the legacy version-root entry for older published versions, and also
+  // mirror every artifact under demo/. Snapshot document links consistently
+  // point to demo/index.html; static uploads must serve that path too, while
+  // runtime snapshots use the same trusted directory through /demo-runtime.
+  await cp(artifactRoot, path.join(destination, "demo"), { recursive: true, force: true });
   return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/${artifact.entryFile}`;
 }
 
@@ -1926,7 +1927,7 @@ export async function publishRequirement(input: PublishRequirementInput) {
       : [{ path: "PRD.md", data: Buffer.from(prdMarkdown, "utf8") }];
     const assetManifest = await snapshotFromEntries(snapshotEntries);
     const runtime = runtimeFromSnapshotEntries(snapshotEntries);
-    const staticDemoEntryUrl = artifact ? await publishArtifactFiles(artifact, projectCode, requirementCode, number, runtime) : undefined;
+    const staticDemoEntryUrl = artifact ? await publishArtifactFiles(artifact, projectCode, requirementCode, number) : undefined;
     const demoEntryUrl = runtimeDemoEntryUrl(projectCode, requirementCode, number, runtime) ?? staticDemoEntryUrl;
     const version: RequirementVersion = {
       id: randomUUID(),
