@@ -36,7 +36,10 @@ function hasBearerAccessToken(request: NextRequest) {
 export async function middleware(request: NextRequest) {
   if (process.env.AUTH_MODE !== "feishu") return NextResponse.next();
   const path = request.nextUrl.pathname;
-  if (path === "/login" || path.startsWith("/auth/") || path.startsWith("/api/auth/") || path === "/api/health" || path === "/mcp") return NextResponse.next();
+  // Signed preview assets authenticate inside the route with a short-lived token.
+  // They must bypass the session redirect so sandboxed iframes can load CSS/JS
+  // without cookies; invalid or expired tokens still receive a 404 from the route.
+  if (path === "/login" || path.startsWith("/auth/") || path.startsWith("/api/auth/") || path === "/api/health" || path === "/mcp" || path.startsWith("/demo-preview/")) return NextResponse.next();
   if (hasBearerAccessToken(request)) return NextResponse.next();
   if (await hasValidSession(request.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();
   if (path.startsWith("/api/")) return NextResponse.json({ error: "请先使用飞书登录。" }, { status: 401 });
