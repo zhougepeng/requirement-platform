@@ -29,6 +29,13 @@ if [[ -L "$CURRENT_LINK" ]]; then
 fi
 
 if [[ -e "$NEXT_RELEASE" ]]; then
+  CURRENT_TARGET="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+  if [[ "$CURRENT_TARGET" == "$NEXT_RELEASE" ]] \
+    && curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${PORT}/api/health" >/dev/null \
+    && find "$NEXT_RELEASE/.next/standalone/.next/static" -type f -name '*.js' -print -quit | grep -q .; then
+    echo "Requirement platform release already active and healthy on port ${PORT}."
+    exit 0
+  fi
   echo "Release already exists: $NEXT_RELEASE" >&2
   exit 1
 fi
