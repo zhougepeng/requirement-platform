@@ -42,21 +42,52 @@ function renderFlowchartFallback(source: string) {
   const edges: Edge[] = [];
   const ensureNode = (id: string, label = id, decision = false) => {
     const current = nodes.get(id);
-    if (!current || current.label === current.id) nodes.set(id, { id, label, decision });
+    if (!current || current.label === current.id) {
+      nodes.set(id, { id, label, decision });
+      return;
+    }
+    // An edge may be declared before the node shape. Keep the later shape
+    // information so a decision remains a diamond in the fallback renderer.
+    if (decision && !current.decision) nodes.set(id, { ...current, decision: true });
   };
 
   for (const line of source.split("\n")) {
     for (const match of line.matchAll(/([A-Za-z][\w-]*)\s*(?:\[([^\]]+)\]|\{([^}]+)\})/g)) {
       ensureNode(match[1], match[2] || match[3] || match[1], Boolean(match[3]));
     }
-    const arrow = line.match(/^\s*([A-Za-z][\w-]*)[^\r\n]*?(-->|-\.([^.]*)\.->)\s*(?:\|([^|]+)\|\s*)?([A-Za-z][\w-]*)/);
-    if (!arrow) continue;
-    const from = arrow[1];
-    const to = arrow[5];
-    const label = (arrow[4] || arrow[3] || "").trim();
-    ensureNode(from);
-    ensureNode(to);
-    if (!edges.some((edge) => edge.from === from && edge.to === to && edge.label === label)) edges.push({ from, to, label, dashed: arrow[2].startsWith("-.") });
+    // A node shape can be declared on the same line as an edge
+    // (A[开始] --> B[下一步]). Remove only the shape text before parsing
+    // edges, otherwise the bracket interrupts the arrow matcher.
+    const edgeLine = line.replace(/([A-Za-z][\w-]*)\s*(?:\[[^\]]+\]|\{[^}]+\})/g, "$1");
+
+    // Mermaid permits chained edges (A --> B --> C) and fan-out edges
+    // (A --> B & C). Reading every edge instead of only the first one keeps
+    // branch and convergence lines intact in the local fallback renderer.
+    for (const match of edgeLine.matchAll(/([A-Za-z][\w-]*)\s*(-->|-\.->)\s*(?:\|([^|]+)\|\s*)?([A-Za-z][\w-]*)/g)) {
+      const from = match[1];
+      const to = match[4];
+      const label = (match[3] || "").trim();
+      ensureNode(from);
+      ensureNode(to);
+      if (!edges.some((edge) => edge.from === from && edge.to === to && edge.label === label)) edges.push({ from, to, label, dashed: match[2].startsWith("-.") });
+    }
+    for (const match of edgeLine.matchAll(/([A-Za-z][\w-]*)\s*-\.\s*([^\.\r\n]+?)\s*\.->\s*([A-Za-z][\w-]*)/g)) {
+      const from = match[1];
+      const to = match[3];
+      const label = match[2].trim();
+      ensureNode(from);
+      ensureNode(to);
+      if (!edges.some((edge) => edge.from === from && edge.to === to && edge.label === label)) edges.push({ from, to, label, dashed: true });
+    }
+    for (const match of edgeLine.matchAll(/([A-Za-z][\w-]*)\s*(-->|-\.->)\s*(?:\|([^|]+)\|\s*)?([A-Za-z][\w-]*)\s*&\s*([A-Za-z][\w-]*)/g)) {
+      const from = match[1];
+      const label = (match[3] || "").trim();
+      ensureNode(from);
+      for (const to of [match[4], match[5]]) {
+        ensureNode(to);
+        if (!edges.some((edge) => edge.from === from && edge.to === to && edge.label === label)) edges.push({ from, to, label, dashed: match[2].startsWith("-.") });
+      }
+    }
   }
 
   if (!nodes.size) return "";
@@ -88,13 +119,41 @@ function renderFlowchartFallback(source: string) {
   for (const [level, ids] of groups) ids.forEach((id, index) => positions.set(id, { x: ((index + 1) * width) / (ids.length + 1), y: 54 + level * 126 }));
   const nodeWidth = 174;
   const nodeHeight = 48;
+  const decisionWidth = 176;
+  const decisionHeight = 86;
+  const nodeBounds = (node: Node) => (node.decision ? { width: decisionWidth, height: decisionHeight } : { width: nodeWidth, height: nodeHeight });
+  const xValues = [...positions.values()].map(({ x }) => x);
+  const minX = Math.min(...xValues);
+  const maxX = Math.max(...xValues);
   const edgeSvg = edges.map((edge) => {
     const from = positions.get(edge.from);
     const to = positions.get(edge.to);
-    if (!from || !to) return "";
-    const midY = Math.round((from.y + to.y) / 2);
-    const label = edge.label ? `<text x="${Math.round((from.x + to.x) / 2)}" y="${midY - 5}" text-anchor="middle" class="flowchart-fallback-label">${escapeSvgText(edge.label)}</text>` : "";
-    return `<path d="M ${from.x} ${from.y + nodeHeight / 2} V ${midY} H ${to.x} V ${to.y - nodeHeight / 2}" class="flowchart-fallback-edge${edge.dashed ? " is-dashed" : ""}" marker-end="url(#flowchart-arrow)"/>${label}`;
+    const fromNode = nodes.get(edge.from);
+    const toNode = nodes.get(edge.to);
+    if (!from || !to || !fromNode || !toNode) return "";
+    const fromBounds = nodeBounds(fromNode);
+    const toBounds = nodeBounds(toNode);
+    const startY = from.y + fromBounds.height / 2;
+    const endY = to.y - toBounds.height / 2;
+    const bend = Math.max(28, Math.abs(endY - startY) * 0.42);
+    const fromLevel = levels.get(edge.from) || 0;
+    const toLevel = levels.get(edge.to) || 0;
+    // Use the rendered distance as a second guard. A direct edge can make
+    // the level numbers look adjacent even when another branch sits between
+    // the two nodes vertically.
+    const isLongEdge = toLevel - fromLevel > 1 || endY - startY > 160;
+    // Long convergence edges must travel around the intermediate branch
+    // instead of cutting through another decision diamond.
+    const laneX = from.x <= to.x ? Math.max(24, minX - 88) : Math.min(width - 24, maxX + 88);
+    const path = isLongEdge
+      ? `M ${from.x} ${startY} C ${from.x} ${startY + 24}, ${laneX} ${startY + 24}, ${laneX} ${startY + 52} V ${endY - 52} C ${laneX} ${endY - 24}, ${to.x} ${endY - 24}, ${to.x} ${endY}`
+      : `M ${from.x} ${startY} C ${from.x} ${startY + bend}, ${to.x} ${endY - bend}, ${to.x} ${endY}`;
+    const midX = isLongEdge ? laneX : Math.round((from.x + to.x) / 2);
+    const midY = Math.round((startY + endY) / 2);
+    const label = edge.label
+      ? `<g class="flowchart-fallback-edge-label"><rect x="${midX - Math.max(13, edge.label.length * 6)}" y="${midY - 12}" width="${Math.max(26, edge.label.length * 12)}" height="20" rx="10"/><text x="${midX}" y="${midY + 3}" text-anchor="middle" class="flowchart-fallback-label">${escapeSvgText(edge.label)}</text></g>`
+      : "";
+    return `<path d="${path}" class="flowchart-fallback-edge${edge.dashed ? " is-dashed" : ""}" marker-end="url(#flowchart-arrow)"/>${label}`;
   }).join("");
   const nodeSvg = [...nodes.values()].map((node) => {
     const point = positions.get(node.id);
@@ -108,7 +167,10 @@ function renderFlowchartFallback(source: string) {
     }, []);
     const text = words.slice(0, 3).map((line, index) => `<tspan x="${point.x}" dy="${index ? 16 : 0}">${escapeSvgText(line)}${index === 2 && words.length > 3 ? "…" : ""}</tspan>`).join("");
     const textOffset = (Math.min(words.length, 3) - 1) * 8;
-    return `<g><rect x="${point.x - nodeWidth / 2}" y="${point.y - nodeHeight / 2}" width="${nodeWidth}" height="${nodeHeight}" rx="${node.decision ? 24 : 8}" class="flowchart-fallback-node${node.decision ? " is-decision" : ""}"/><text x="${point.x}" y="${point.y - textOffset + 5}" text-anchor="middle" class="flowchart-fallback-node-text">${text}</text></g>`;
+    const shape = node.decision
+      ? `<polygon points="${point.x},${point.y - decisionHeight / 2} ${point.x + decisionWidth / 2},${point.y} ${point.x},${point.y + decisionHeight / 2} ${point.x - decisionWidth / 2},${point.y}" class="flowchart-fallback-node is-decision"/>`
+      : `<rect x="${point.x - nodeWidth / 2}" y="${point.y - nodeHeight / 2}" width="${nodeWidth}" height="${nodeHeight}" rx="8" class="flowchart-fallback-node"/>`;
+    return `<g>${shape}<text x="${point.x}" y="${point.y - textOffset + 5}" text-anchor="middle" class="flowchart-fallback-node-text">${text}</text></g>`;
   }).join("");
   return `<svg class="flowchart-fallback-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="业务流程图"><defs><marker id="flowchart-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#64748b"/></marker></defs>${edgeSvg}${nodeSvg}</svg>`;
 }
@@ -136,7 +198,7 @@ function DiagramViewport({ svg, className = "" }: { svg: string; className?: str
 
 function MermaidDiagram({ source }: { source: string }) {
   const reactId = useId();
-  const isFlowchart = /^\s*flowchart\s+/m.test(source);
+  const isFlowchart = /^\s*(?:flowchart|graph)\s+/m.test(source);
   const [svg, setSvg] = useState("");
   const [failed, setFailed] = useState(false);
   const [showFallback, setShowFallback] = useState(() => isFlowchart || fallbackFlowchartSources.has(source));
