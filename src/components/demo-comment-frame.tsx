@@ -31,7 +31,32 @@ const demoCommentBridge = String.raw`(() => {
 })();`;
 
 function roots(comments: RequirementComment[]) { return comments.filter((comment) => !comment.parentId && comment.anchor && "selector" in comment.anchor && !comment.deletedAt); }
-function injectBridge(html: string, src: string) { const base = new URL(".", src).href.replace(/"/g, "%22"); const origin = new URL(src).origin.replace(/"/g, "%22"); const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${origin} data: blob:; style-src ${origin} 'unsafe-inline'; script-src ${origin} 'unsafe-inline'; font-src ${origin} data:; frame-src ${origin}; form-action 'none'; connect-src 'none'; base-uri ${origin}">`; const withBase = /<head\b[^>]*>/i.test(html) ? html.replace(/<head\b[^>]*>/i, (head) => `${head}${csp}<base href="${base}">`) : `${csp}<base href="${base}">${html}`; const bridge = `<script>${demoCommentBridge.replace(/<\/script/gi, "<\\/script")}</script>`; return /<\/body>/i.test(withBase) ? withBase.replace(/<\/body>/i, `${bridge}</body>`) : `${withBase}${bridge}`; }
+const isolatedStorageBridge = String.raw`(() => {
+  const createStorage = () => {
+    let values = Object.create(null);
+    return {
+      get length() { return Object.keys(values).length; },
+      key(index) { return Object.keys(values)[index] ?? null; },
+      getItem(key) { const value = values[String(key)]; return value === undefined ? null : value; },
+      setItem(key, value) { values[String(key)] = String(value); },
+      removeItem(key) { delete values[String(key)]; },
+      clear() { values = Object.create(null); },
+    };
+  };
+  for (const name of ["localStorage", "sessionStorage"]) {
+    try { window[name].getItem("__requirement_platform_probe__"); }
+    catch { try { Object.defineProperty(window, name, { configurable: true, value: createStorage() }); } catch {} }
+  }
+})();`;
+function injectBridge(html: string, src: string) {
+  const base = new URL(".", src).href.replace(/"/g, "%22");
+  const origin = new URL(src).origin.replace(/"/g, "%22");
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${origin} data: blob:; style-src ${origin} 'unsafe-inline'; script-src ${origin} 'unsafe-inline'; font-src ${origin} data:; frame-src ${origin}; form-action 'none'; connect-src 'none'; base-uri ${origin}">`;
+  const storage = `<script>${isolatedStorageBridge.replace(/<\/script/gi, "<\\/script")}</script>`;
+  const withBase = /<head\b[^>]*>/i.test(html) ? html.replace(/<head\b[^>]*>/i, (head) => `${head}${csp}<base href="${base}">${storage}`) : `${csp}<base href="${base}">${storage}${html}`;
+  const bridge = `<script>${demoCommentBridge.replace(/<\/script/gi, "<\\/script")}</script>`;
+  return /<\/body>/i.test(withBase) ? withBase.replace(/<\/body>/i, `${bridge}</body>`) : `${withBase}${bridge}`;
+}
 function bubblePosition(frameRect: DOMRect, data: Record<string, unknown>, height: number) {
   const gap = 10;
   const width = 306;
