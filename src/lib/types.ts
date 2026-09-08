@@ -7,11 +7,27 @@ export type RequirementVersion = {
   changeSummary: string;
   prd: string;
   demoEntryUrl?: string;
+  /** Optional lazily-started Demo runtime. Static HTML versions leave this unset. */
+  runtime?: RequirementRuntime;
   artifactId: string;
   versionName?: string;
   sourceVersionNo?: number;
   assetManifest?: RequirementAssetManifest;
   documents?: RequirementDocument[];
+};
+
+/**
+ * Server-side Demo runtime contract.
+ *
+ * The command is intentionally an enum rather than a shell string: the
+ * platform may only start the audited npm script adapters and never evaluates
+ * an uploaded command through a shell.
+ */
+export type RequirementRuntime = {
+  kind: "node-npm-script";
+  command: "npm-start" | "npm-dev";
+  port: number;
+  healthPath: string;
 };
 
 /** Lightweight version metadata used by the requirement detail first paint. */

@@ -32,6 +32,7 @@ export const listRequirementTimeline = localStore.listRequirementTimeline;
 export const listVersions = localStore.listVersions;
 export const listVersionSummaries = localStore.listVersionSummaries;
 export const getVersion = localStore.getVersion;
+export const getRequirementVersionRuntimeContext = localStore.getRequirementVersionRuntimeContext;
 export const listPrdComments = localStore.listPrdComments;
 export const addPrdComment = localStore.addPrdComment;
 export const replyPrdComment = localStore.replyPrdComment;

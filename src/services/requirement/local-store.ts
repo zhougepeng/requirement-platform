@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecEntry, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
+import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecEntry, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementRuntime, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -22,6 +22,14 @@ const MAX_ARTIFACT_FILES = 150;
 const ASSET_OBJECT_DIR = path.join(DATA_DIR, "asset-objects");
 const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
 const MAX_SNAPSHOT_FILES = 500;
+const SNAPSHOT_PATCH_ENTRY = "__requirement-platform-patch__.json";
+
+export function publishedDemoDirectory(projectCode: string, requirementCode: string, versionNo: number) {
+  safeSegment(projectCode, "项目编码");
+  safeSegment(requirementCode, "需求编码");
+  if (!Number.isInteger(versionNo) || versionNo < 1) throw new Error("版本号不合法。");
+  return path.join(PUBLISHED_DEMO_DIR, projectCode, requirementCode, `v${versionNo}`);
+}
 
 let mutationQueue = Promise.resolve();
 
@@ -164,11 +172,63 @@ async function snapshotFromEntries(entries: Array<{ path: string; data: Buffer }
   return { files: files.toSorted((left, right) => left.path.localeCompare(right.path)), totalFiles: files.length, totalSize, createdAt: now() } satisfies RequirementAssetManifest;
 }
 
+function runtimePort(value: unknown) {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 3000;
+}
+
+function runtimeHealthPath(value: unknown) {
+  const healthPath = typeof value === "string" && value.trim() ? value.trim() : "/";
+  if (!healthPath.startsWith("/") || healthPath.includes("\\") || healthPath.includes("..")) return "/";
+  return healthPath.slice(0, 200);
+}
+
+/** Derive the only runtime adapter currently supported by the platform. */
+function runtimeFromSnapshotEntries(entries: Array<{ path: string; data: Buffer }>): RequirementRuntime | undefined {
+  const runtimeEntry = entries.find((entry) => entry.path.toLowerCase() === "demo/runtime.json");
+  let declared: Record<string, unknown> = {};
+  if (runtimeEntry) {
+    try {
+      const parsed = JSON.parse(runtimeEntry.data.toString("utf8")) as unknown;
+      if (parsed && typeof parsed === "object") declared = parsed as Record<string, unknown>;
+    } catch {
+      // A malformed optional runtime manifest must not make static HTML fail.
+    }
+  }
+  const packageEntry = entries.find((entry) => entry.path.toLowerCase() === "demo/package.json");
+  let detectedCommand: RequirementRuntime["command"] | undefined;
+  if (packageEntry) {
+    try {
+      const packageJson = JSON.parse(packageEntry.data.toString("utf8")) as { scripts?: { start?: unknown; dev?: unknown } };
+      if (typeof packageJson.scripts?.start === "string" && packageJson.scripts.start.trim().length > 0) detectedCommand = "npm-start";
+      else if (typeof packageJson.scripts?.dev === "string" && packageJson.scripts.dev.trim().length > 0) detectedCommand = "npm-dev";
+    } catch {
+      detectedCommand = undefined;
+    }
+  }
+  // Runtime execution is an explicit publish contract. Merely uploading a
+  // package.json with a start/dev script must never turn into server-side code
+  // execution; Workbench adds this allowlisted manifest when the user chooses
+  // a runnable Demo directory.
+  const declaredCommand: RequirementRuntime["command"] | undefined = declared.command === "npm-start" || declared.command === "npm-dev" ? declared.command : undefined;
+  const declaredAdapter = declared.kind === "node-npm-script" && Boolean(declaredCommand);
+  if (!declaredAdapter || !detectedCommand || declaredCommand !== detectedCommand) return undefined;
+  return {
+    kind: "node-npm-script",
+    command: declaredCommand,
+    port: runtimePort(declared.port),
+    healthPath: runtimeHealthPath(declared.healthPath),
+  };
+}
+
+function runtimeDemoEntryUrl(projectCode: string, requirementCode: string, versionNo: number, runtime?: RequirementRuntime) {
+  return runtime ? `/demo-runtime/${projectCode}/${requirementCode}/v${versionNo}/` : undefined;
+}
+
 async function materializeSnapshotDemo(manifest: RequirementAssetManifest, projectCode: string, requirementCode: string, versionNo: number) {
   const demoFiles = manifest.files.filter((file) => file.path.startsWith("demo/"));
   const demoEntry = demoFiles.find((file) => file.path.toLowerCase() === "demo/index.html") ?? demoFiles.find((file) => /\.html?$/i.test(file.path));
-  safeSegment(projectCode, "项目编码"); safeSegment(requirementCode, "需求编码");
-  const destination = path.join(PUBLISHED_DEMO_DIR, projectCode, requirementCode, `v${versionNo}`);
+  const destination = publishedDemoDirectory(projectCode, requirementCode, versionNo);
   const temporary = `${destination}.${randomUUID()}.tmp`;
   for (const file of manifest.files) {
     const relative = file.path;
@@ -190,17 +250,18 @@ async function parseSnapshotArchive(file: File) {
     .getEntries()
     .filter((entry) => !entry.isDirectory)
     .map((entry) => ({ path: safeAssetPath(snapshotEntryPath(entry)), data: entry.getData() }));
+  const patchEntry = entries.find((entry) => entry.path === SNAPSHOT_PATCH_ENTRY);
   const prdEntries = entries.filter((entry) => /(?:^|\/)prd\.(?:md|markdown)$/i.test(entry.path) || /^prd\/.+\.(?:md|markdown)$/i.test(entry.path) || /^PRD\.md$/i.test(entry.path));
-  if (!prdEntries.length) throw new Error("需求资产 ZIP 必须包含 PRD.md 或 prd/ 下的 Markdown 文件。");
+  if (!prdEntries.length && !patchEntry) throw new Error("需求资产 ZIP 必须包含 PRD.md 或 prd/ 下的 Markdown 文件。");
   return entries;
 }
 
-function documentsForSnapshot(entries: Array<{ path: string; data: Buffer }>, projectCode: string, requirementCode: string, versionNo: number): RequirementDocument[] {
+function documentsForSnapshot(entries: Array<{ path: string; data: Buffer }>, projectCode: string, requirementCode: string, versionNo: number, runtime?: RequirementRuntime): RequirementDocument[] {
   const nestedPrds = entries.filter((entry) => /^prd\/.+\.(?:md|markdown)$/i.test(entry.path)).toSorted((a, b) => a.path.localeCompare(b.path));
   // 根目录 PRD.md 是给旧版发布端的兼容副本；已有 prd/ 多文件时不再把它展示成重复目录项。
   const prds = nestedPrds.length ? nestedPrds : entries.filter((entry) => /^PRD\.md$/i.test(entry.path));
   const demos = entries.filter((entry) => entry.path.startsWith("demo/") && /\.html?$/i.test(entry.path)).toSorted((a, b) => a.path.localeCompare(b.path));
-  const base = `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/`;
+  const base = runtime ? `/demo-runtime/${projectCode}/${requirementCode}/v${versionNo}/` : `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/`;
   return [
     ...prds.map((entry, index) => ({ id: `prd_${index}_${entry.path}`, name: path.posix.basename(entry.path), path: entry.path, kind: "prd" as const, mimeType: mimeType(entry.path), order: index, content: entry.data.toString("utf8"), url: `${base}${entry.path}` })),
     ...demos.map((entry, index) => ({ id: `demo_${index}_${entry.path}`, name: path.posix.basename(entry.path), path: entry.path, kind: "demo" as const, mimeType: mimeType(entry.path), order: index, url: `${base}${entry.path}` })),
@@ -214,7 +275,7 @@ async function writeStore(store: RequirementStore) {
   await rename(temp, STORE_FILE);
 }
 
-async function publishArtifactFiles(artifact: DemoArtifact, projectCode: string, requirementCode: string, versionNo: number) {
+async function publishArtifactFiles(artifact: DemoArtifact, projectCode: string, requirementCode: string, versionNo: number, runtime?: RequirementRuntime) {
   safeSegment(projectCode, "项目编码");
   safeSegment(requirementCode, "需求编码");
   const artifactRoot = path.join(ARTIFACT_DIR, artifact.id);
@@ -223,7 +284,27 @@ async function publishArtifactFiles(artifact: DemoArtifact, projectCode: string,
   await stat(source);
   await mkdir(destination, { recursive: true });
   await cp(artifactRoot, destination, { recursive: true, force: true });
+  // Legacy artifact uploads are stored at the version root for static HTML.
+  // Runtime snapshots use a demo/ working directory, so mirror the trusted
+  // artifact there only when the explicit runtime contract is present.
+  if (runtime) await cp(artifactRoot, path.join(destination, "demo"), { recursive: true, force: true });
   return `/demo-assets/${projectCode}/${requirementCode}/v${versionNo}/${artifact.entryFile}`;
+}
+
+async function artifactSnapshotEntries(artifact: DemoArtifact) {
+  const root = path.join(ARTIFACT_DIR, artifact.id);
+  const entries: Array<{ path: string; data: Buffer }> = [];
+  async function visit(folder: string, relative = "") : Promise<void> {
+    for (const entry of await readdir(folder, { withFileTypes: true })) {
+      const nextRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const source = path.join(folder, entry.name);
+      if (entry.isSymbolicLink()) throw new Error("Demo 工件包含不支持的符号链接。");
+      if (entry.isDirectory()) await visit(source, nextRelative);
+      else if (entry.isFile()) entries.push({ path: `demo/${safeAssetPath(nextRelative)}`, data: await readFile(source) });
+    }
+  }
+  await visit(root);
+  return entries;
 }
 
 function isLegacyDemoStore(store: RequirementStore) {
@@ -1056,6 +1137,15 @@ export async function getVersion(requirementCode: string, versionNo: number) {
   return clone(version);
 }
 
+export async function getRequirementVersionRuntimeContext(requirementCode: string, versionNo: number) {
+  const store = await ensureStore();
+  const requirement = store.requirements.find((item) => item.code === requirementCode);
+  const version = store.versions.find((item) => item.requirementCode === requirementCode && item.number === versionNo);
+  const project = requirement ? store.projects.find((item) => item.id === requirement.projectId) : undefined;
+  if (!requirement || !version || !project || archived(requirement) || archived(project)) throw new Error("需求或版本不存在，或已作废。");
+  return clone({ projectCode: project.id, requirementCode, version });
+}
+
 export async function listPrdComments(requirementCode: string, versionId: string, documentId: string) {
   const store = await ensureStore();
   return clone(store.comments
@@ -1717,7 +1807,7 @@ function decodeDemoText(value: string) {
 }
 
 async function analyseDemo(entryUrl: string): Promise<DemoAnalysis> {
-  const relative = /^\/demo-assets\/(.+)$/.exec(entryUrl)?.[1];
+  const relative = /^(?:\/demo-assets|\/demo-runtime)\/(.+)$/.exec(entryUrl)?.[1];
   if (!relative) return { summary: "当前版本没有可读取的 Demo 页面。", demoIds: [], supportsAutomation: false };
   const segments = relative.split("/");
   if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === ".." || /[\\/]/.test(segment))) {
@@ -1738,7 +1828,7 @@ async function analyseDemo(entryUrl: string): Promise<DemoAnalysis> {
 }
 
 async function readDemoSource(entryUrl: string) {
-  const relative = /^\/demo-assets\/(.+)$/.exec(entryUrl)?.[1];
+  const relative = /^(?:\/demo-assets|\/demo-runtime)\/(.+)$/.exec(entryUrl)?.[1];
   if (!relative) return "";
   const segments = relative.split("/");
   if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === ".." || /[\\/]/.test(segment))) return "";
@@ -1831,8 +1921,13 @@ export async function publishRequirement(input: PublishRequirementInput) {
 
     const versions = store.versions.filter((item) => item.requirementCode === requirementCode);
     const number = versions.reduce((max, version) => Math.max(max, version.number), 0) + 1;
-    const demoEntryUrl = artifact ? await publishArtifactFiles(artifact, projectCode, requirementCode, number) : undefined;
-    const assetManifest = artifact ? undefined : await snapshotFromEntries([{ path: "PRD.md", data: Buffer.from(prdMarkdown, "utf8") }]);
+    const snapshotEntries = artifact
+      ? [{ path: "PRD.md", data: Buffer.from(prdMarkdown, "utf8") }, ...(await artifactSnapshotEntries(artifact))]
+      : [{ path: "PRD.md", data: Buffer.from(prdMarkdown, "utf8") }];
+    const assetManifest = await snapshotFromEntries(snapshotEntries);
+    const runtime = runtimeFromSnapshotEntries(snapshotEntries);
+    const staticDemoEntryUrl = artifact ? await publishArtifactFiles(artifact, projectCode, requirementCode, number, runtime) : undefined;
+    const demoEntryUrl = runtimeDemoEntryUrl(projectCode, requirementCode, number, runtime) ?? staticDemoEntryUrl;
     const version: RequirementVersion = {
       id: randomUUID(),
       requirementCode,
@@ -1842,12 +1937,10 @@ export async function publishRequirement(input: PublishRequirementInput) {
       changeSummary,
       prd: prdMarkdown,
       demoEntryUrl,
+      ...(runtime ? { runtime } : {}),
       artifactId: artifact?.id || `prd_${randomUUID().replaceAll("-", "")}`,
       ...(assetManifest ? { assetManifest } : {}),
-      documents: [
-        { id: `${requirementCode}:v${number}:prd`, name: "PRD.md", path: "PRD.md", kind: "prd", mimeType: "text/markdown", order: 0, content: prdMarkdown },
-        ...(artifact && demoEntryUrl ? [{ id: `${requirementCode}:v${number}:demo`, name: artifact.entryFile, path: artifact.entryFile, kind: "demo" as const, mimeType: mimeType(artifact.entryFile), order: 0, url: demoEntryUrl }] : []),
-      ],
+       documents: documentsForSnapshot(snapshotEntries, project.id, requirementCode, number, runtime),
     };
     store.versions.push(version);
     requirement.title = title;
@@ -1876,17 +1969,7 @@ async function legacyManifest(store: RequirementStore, version: RequirementVersi
   if (version.assetManifest) return version.assetManifest;
   const artifact = store.artifacts.find((item) => item.id === version.artifactId);
   if (!artifact) throw new Error("历史版本缺少可恢复的 Demo 工件。");
-  const root = path.join(ARTIFACT_DIR, artifact.id);
-  const entries: Array<{ path: string; data: Buffer }> = [{ path: "PRD.md", data: Buffer.from(version.prd, "utf8") }];
-  async function visit(folder: string, relative = "") : Promise<void> {
-    for (const entry of await readdir(folder, { withFileTypes: true })) {
-      const nextRelative = relative ? `${relative}/${entry.name}` : entry.name;
-      const source = path.join(folder, entry.name);
-      if (entry.isDirectory()) await visit(source, nextRelative);
-      else if (entry.isFile()) entries.push({ path: `demo/${safeAssetPath(nextRelative)}`, data: await readFile(source) });
-    }
-  }
-  await visit(root);
+  const entries = [{ path: "PRD.md", data: Buffer.from(version.prd, "utf8") }, ...(await artifactSnapshotEntries(artifact))];
   return snapshotFromEntries(entries);
 }
 
@@ -1896,10 +1979,7 @@ export async function publishRequirementSnapshot(input: PublishRequirementSnapsh
   safeSegment(requirementCode, "需求编码");
   if (!changeSummary || changeSummary.length > 1000) throw new Error("版本说明不能为空且不能超过 1000 字。");
   const entries = await parseSnapshotArchive(input.archive);
-  const manifest = await snapshotFromEntries(entries);
-  const primaryPrd = entries.find((entry) => entry.path === "PRD.md") ?? entries.filter((entry) => /^prd\/.+\.(?:md|markdown)$/i.test(entry.path)).toSorted((left, right) => left.path.localeCompare(right.path))[0];
-  const prd = primaryPrd?.data.toString("utf8").trim();
-  if (!prd) throw new Error("PRD.md 或 prd/ 下的首个 Markdown 不能为空。");
+  const patchEntry = entries.find((entry) => entry.path === SNAPSHOT_PATCH_ENTRY);
   return mutate(async (store) => {
     const requirement = store.requirements.find((item) => item.code === requirementCode);
     if (!requirement) throw new Error("需求不存在。");
@@ -1907,8 +1987,46 @@ export async function publishRequirementSnapshot(input: PublishRequirementSnapsh
     if (!project) throw new Error("需求所属项目不存在。");
     if (archived(project) || archived(requirement)) throw new Error("已作废项目或需求不能发布新版本，请先恢复后再操作。");
     const number = store.versions.filter((item) => item.requirementCode === requirementCode).reduce((max, item) => Math.max(max, item.number), 0) + 1;
-    const demoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);
-    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: input.actor?.name || "本地开发身份", changeSummary, prd, demoEntryUrl, artifactId: `snapshot_${randomUUID().replaceAll("-", "")}`, versionName: input.versionName?.trim().slice(0, 80) || undefined, assetManifest: manifest, documents: documentsForSnapshot(entries, project.id, requirementCode, number) };
+    let sourceVersionNo: number | undefined;
+    let snapshotEntries = entries.filter((entry) => entry.path !== SNAPSHOT_PATCH_ENTRY);
+    if (patchEntry) {
+      let patch: { type?: string; baseVersion?: number; changed?: string[]; deleted?: string[] };
+      try {
+        patch = JSON.parse(patchEntry.data.toString("utf8")) as typeof patch;
+      } catch {
+        throw new Error("增量需求包的补丁清单无法读取。");
+      }
+      sourceVersionNo = Number(patch.baseVersion);
+      if (patch.type !== "requirement_snapshot_delta" || !Number.isInteger(sourceVersionNo) || sourceVersionNo < 1 || sourceVersionNo >= number)
+        throw new Error("增量需求包的基础版本不合法。");
+      const source = store.versions.find((version) => version.requirementCode === requirementCode && version.number === sourceVersionNo);
+      if (!source) throw new Error(`增量需求包依赖 V${sourceVersionNo}，但该版本不存在。`);
+      const baseManifest = source.assetManifest ?? await legacyManifest(store, source);
+      const changed = new Set((Array.isArray(patch.changed) ? patch.changed : []).map((item) => safeAssetPath(String(item))));
+      const deleted = new Set((Array.isArray(patch.deleted) ? patch.deleted : []).map((item) => safeAssetPath(String(item))));
+      const changedEntries = new Map(snapshotEntries.map((entry) => [entry.path, entry]));
+      for (const entry of snapshotEntries) {
+        if (!changed.has(entry.path)) throw new Error(`增量需求包包含未声明的文件：${entry.path}`);
+      }
+      for (const file of changed) {
+        if (!changedEntries.has(file)) throw new Error(`增量需求包缺少变更文件：${file}`);
+        deleted.delete(file);
+      }
+      const baseEntries = await Promise.all(
+        baseManifest.files
+          .filter((file) => !changed.has(file.path) && !deleted.has(file.path))
+          .map(async (file) => ({ path: file.path, data: await readFile(path.join(ASSET_OBJECT_DIR, file.hash)) })),
+      );
+      snapshotEntries = [...baseEntries, ...snapshotEntries];
+    }
+    const manifest = await snapshotFromEntries(snapshotEntries);
+    const primaryPrd = snapshotEntries.find((entry) => entry.path === "PRD.md") ?? snapshotEntries.filter((entry) => /^prd\/.+\.(?:md|markdown)$/i.test(entry.path)).toSorted((left, right) => left.path.localeCompare(right.path))[0];
+    const prd = primaryPrd?.data.toString("utf8").trim();
+    if (!prd) throw new Error("PRD.md 或 prd/ 下的首个 Markdown 不能为空。");
+    const staticDemoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);
+    const runtime = runtimeFromSnapshotEntries(snapshotEntries);
+    const demoEntryUrl = runtimeDemoEntryUrl(project.id, requirementCode, number, runtime) ?? staticDemoEntryUrl;
+    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: input.actor?.name || "本地开发身份", changeSummary, prd, demoEntryUrl, ...(runtime ? { runtime } : {}), artifactId: `snapshot_${randomUUID().replaceAll("-", "")}`, sourceVersionNo, versionName: input.versionName?.trim().slice(0, 80) || undefined, assetManifest: manifest, documents: documentsForSnapshot(snapshotEntries, project.id, requirementCode, number, runtime) };
     store.versions.push(version);
     if (input.setCurrent !== false) {
       requirement.currentVersionId = version.id;
@@ -1990,9 +2108,11 @@ export async function restoreRequirementVersion(requirementCode: string, sourceV
     if (archived(project) || archived(requirement)) throw new Error("已作废项目或需求不能恢复版本，请先恢复后再操作。");
     const manifest = await legacyManifest(store, source);
     const number = store.versions.filter((item) => item.requirementCode === requirementCode).reduce((max, item) => Math.max(max, item.number), 0) + 1;
-    const demoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);
     const restoredEntries = await Promise.all(manifest.files.map(async (file) => ({ path: file.path, data: await readFile(path.join(ASSET_OBJECT_DIR, file.hash)) })));
-    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: actor?.name || "本地开发身份", changeSummary: `从 V${sourceVersionNo} 恢复`, prd: source.prd, demoEntryUrl, artifactId: `restore_${source.id}`, sourceVersionNo, assetManifest: manifest, documents: documentsForSnapshot(restoredEntries, project.id, requirementCode, number) };
+    const staticDemoEntryUrl = await materializeSnapshotDemo(manifest, project.id, requirementCode, number);
+    const runtime = runtimeFromSnapshotEntries(restoredEntries);
+    const demoEntryUrl = runtimeDemoEntryUrl(project.id, requirementCode, number, runtime) ?? staticDemoEntryUrl;
+    const version: RequirementVersion = { id: randomUUID(), requirementCode, number, publishedAt: now(), publisher: actor?.name || "本地开发身份", changeSummary: `从 V${sourceVersionNo} 恢复`, prd: source.prd, demoEntryUrl, ...(runtime ? { runtime } : {}), artifactId: `restore_${source.id}`, sourceVersionNo, assetManifest: manifest, documents: documentsForSnapshot(restoredEntries, project.id, requirementCode, number, runtime) };
     store.versions.push(version);
     requirement.currentVersionId = version.id;
     requirement.updatedAt = version.publishedAt;
