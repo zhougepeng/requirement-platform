@@ -19,11 +19,25 @@ function sign(payload: string) {
 }
 
 export function isSafeDemoPath(segments: string[]) {
-  return segments.length >= 5 && segments.every((segment) => safeSegment.test(segment));
+  return segments.length >= 4 && segments.every((segment) => safeSegment.test(segment));
 }
 
+/**
+ * Published snapshots exist in two layouts:
+ *
+ *   project/requirement/vN/index.html       (legacy static publish)
+ *   project/requirement/vN/demo/index.html  (new publish layout)
+ *
+ * The token only needs to bind the stable version prefix. Keep accepting both
+ * layouts so old static HTML remains previewable after the signed-preview
+ * middleware is enabled.
+ */
 function isSafeDemoPrefix(segments: string[]) {
-  return segments.length === 4 && segments.every((segment) => safeSegment.test(segment)) && segments[3]?.toLowerCase() === "demo";
+  const safe = segments.every((segment) => safeSegment.test(segment));
+  return safe && (
+    (segments.length === 3) ||
+    (segments.length === 4 && segments[3]?.toLowerCase() === "demo")
+  );
 }
 
 export function createDemoPreviewToken(path: string[]) {

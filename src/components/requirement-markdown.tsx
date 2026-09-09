@@ -109,22 +109,32 @@ function renderFlowchartFallback(source: string) {
     groups.set(level, [...(groups.get(level) || []), id]);
   }
   const maxItems = Math.max(...[...groups.values()].map((group) => group.length));
-  const width = Math.max(860, maxItems * 220 + 80);
+  const nodeWidth = 174;
+  const nodeHeight = 48;
+  const decisionWidth = 176;
+  const decisionHeight = 86;
+  const horizontalGap = 28;
+  const sidePadding = 48;
+  // Keep four-way branches inside the normal content width. The previous
+  // fixed 220px column spacing made the diagram needlessly wide and added a
+  // horizontal scrollbar even when the labels fit comfortably.
+  const width = Math.max(860, maxItems * nodeWidth + Math.max(0, maxItems - 1) * horizontalGap + sidePadding * 2);
   // Levels can have gaps when the source contains branches or a disconnected
   // node. Base the canvas height on the deepest level rather than the number
   // of populated groups so the last nodes and edges are never clipped.
   const maxLevel = Math.max(...levels.values());
   const height = Math.max(220, (maxLevel + 1) * 126 + 64);
   const positions = new Map<string, { x: number; y: number }>();
-  for (const [level, ids] of groups) ids.forEach((id, index) => positions.set(id, { x: ((index + 1) * width) / (ids.length + 1), y: 54 + level * 126 }));
-  const nodeWidth = 174;
-  const nodeHeight = 48;
-  const decisionWidth = 176;
-  const decisionHeight = 86;
+  for (const [level, ids] of groups) {
+    const contentWidth = ids.length * nodeWidth + Math.max(0, ids.length - 1) * horizontalGap;
+    const startX = (width - contentWidth) / 2;
+    ids.forEach((id, index) => positions.set(id, { x: startX + nodeWidth / 2 + index * (nodeWidth + horizontalGap), y: 54 + level * 126 }));
+  }
   const nodeBounds = (node: Node) => (node.decision ? { width: decisionWidth, height: decisionHeight } : { width: nodeWidth, height: nodeHeight });
   const xValues = [...positions.values()].map(({ x }) => x);
   const minX = Math.min(...xValues);
   const maxX = Math.max(...xValues);
+  const longLaneCounters = new Map<string, number>();
   const edgeSvg = edges.map((edge) => {
     const from = positions.get(edge.from);
     const to = positions.get(edge.to);
@@ -143,15 +153,34 @@ function renderFlowchartFallback(source: string) {
     // the two nodes vertically.
     const isLongEdge = toLevel - fromLevel > 1 || endY - startY > 160;
     // Long convergence edges must travel around the intermediate branch
-    // instead of cutting through another decision diamond.
-    const laneX = from.x <= to.x ? Math.max(24, minX - 88) : Math.min(width - 24, maxX + 88);
+    // instead of cutting through another decision diamond. Exception edges
+    // get independent lanes, otherwise the four "异常/超时" paths collapse
+    // into one dashed line and their labels become unreadable.
+    // Exception paths should leave the main spine on the same side as their
+    // destination. This keeps O/P/Q/R -> AA on the right instead of dragging
+    // four dashed lines across the entire diagram; long solid convergence
+    // paths keep the left-side routing used to avoid intermediate branches.
+    const routeRight = edge.dashed || from.x > to.x;
+    const direction = routeRight ? "right" : "left";
+    const laneKey = `${edge.to}:${edge.dashed ? "dashed" : "solid"}:${direction}`;
+    const laneIndex = isLongEdge ? (longLaneCounters.get(laneKey) || 0) : 0;
+    if (isLongEdge) longLaneCounters.set(laneKey, laneIndex + 1);
+    const laneBase = edge.dashed ? 28 : 88;
+    const laneStep = edge.dashed ? 34 : 40;
+    const laneX = routeRight
+      ? Math.min(width - 24, maxX + laneBase + laneIndex * laneStep)
+      : Math.max(24, minX - laneBase - laneIndex * laneStep);
     const path = isLongEdge
       ? `M ${from.x} ${startY} C ${from.x} ${startY + 24}, ${laneX} ${startY + 24}, ${laneX} ${startY + 52} V ${endY - 52} C ${laneX} ${endY - 24}, ${to.x} ${endY - 24}, ${to.x} ${endY}`
       : `M ${from.x} ${startY} C ${from.x} ${startY + bend}, ${to.x} ${endY - bend}, ${to.x} ${endY}`;
-    const midX = isLongEdge ? laneX : Math.round((from.x + to.x) / 2);
+    const labelHalfWidth = Math.max(13, edge.label.length * 6);
+    const rawMidX = isLongEdge ? laneX + (edge.dashed ? 24 : 0) : Math.round((from.x + to.x) / 2);
+    // Keep lane labels inside the SVG when several exception branches use the
+    // right-hand lanes near the canvas edge.
+    const midX = Math.max(labelHalfWidth + 8, Math.min(width - labelHalfWidth - 8, rawMidX));
     const midY = Math.round((startY + endY) / 2);
     const label = edge.label
-      ? `<g class="flowchart-fallback-edge-label"><rect x="${midX - Math.max(13, edge.label.length * 6)}" y="${midY - 12}" width="${Math.max(26, edge.label.length * 12)}" height="20" rx="10"/><text x="${midX}" y="${midY + 3}" text-anchor="middle" class="flowchart-fallback-label">${escapeSvgText(edge.label)}</text></g>`
+      ? `<g class="flowchart-fallback-edge-label"><rect x="${midX - labelHalfWidth}" y="${midY - 12}" width="${labelHalfWidth * 2}" height="20" rx="10"/><text x="${midX}" y="${midY + 3}" text-anchor="middle" class="flowchart-fallback-label">${escapeSvgText(edge.label)}</text></g>`
       : "";
     return `<path d="${path}" class="flowchart-fallback-edge${edge.dashed ? " is-dashed" : ""}" marker-end="url(#flowchart-arrow)"/>${label}`;
   }).join("");

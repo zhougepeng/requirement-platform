@@ -21,8 +21,12 @@ export async function POST(request: Request) {
     const source = new URL(body.src, origin);
     if (source.origin !== origin || !source.pathname.startsWith("/demo-assets/")) throw new Error("仅支持预览本平台已发布的 Demo。");
     const segments = source.pathname.slice("/demo-assets/".length).split("/").map((segment) => decodeURIComponent(segment));
-    if (!isSafeDemoPath(segments) || segments[3]?.toLowerCase() !== "demo") throw new Error("Demo 预览路径无效。");
-    const token = createDemoPreviewToken(segments.slice(0, 4));
+    if (!isSafeDemoPath(segments) || segments.length < 4) throw new Error("Demo 预览路径无效。");
+    // New snapshots include a `demo/` directory; older static publishes put
+    // index.html directly under vN. Bind the token to the common version
+    // prefix while keeping the existing path traversal checks.
+    const prefix = segments[3]?.toLowerCase() === "demo" ? segments.slice(0, 4) : segments.slice(0, 3);
+    const token = createDemoPreviewToken(prefix);
     const previewPath = `/demo-preview/${encodeURIComponent(token)}/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
     return apiJson({ url: previewPath });
   } catch (error) {
