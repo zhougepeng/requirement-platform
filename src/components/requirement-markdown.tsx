@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import mermaid from "mermaid";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -15,10 +16,10 @@ mermaid.initialize({
   securityLevel: "strict",
   theme: "base",
   themeVariables: {
-    primaryColor: "#eff6ff",
-    primaryBorderColor: "#2563eb",
-    primaryTextColor: "#172033",
-    lineColor: "#64748b",
+    primaryColor: "#ecfdf5",
+    primaryBorderColor: "#10b981",
+    primaryTextColor: "#27272a",
+    lineColor: "#71717a",
     secondaryColor: "#f8fafc",
     tertiaryColor: "#ffffff",
   },

@@ -14,6 +14,7 @@ import { PublishPanel } from "@/components/publish-panel";
 import { ProjectDialog } from "@/components/project-dialog";
 import { SnapshotPublishDialog } from "@/components/snapshot-publish-dialog";
 import { RequirementShareDialog } from "@/components/requirement-share-dialog";
+import { RequirementLinkDialog } from "@/components/requirement-link-dialog";
 import { PrdCommentPanel } from "@/components/prd-comment-panel";
 import { RequirementDiscussionPanel } from "@/components/requirement-discussion-panel";
 import { VersionAssetsPanel } from "@/components/version-assets-panel";
@@ -1010,6 +1011,7 @@ export function RequirementWorkspace({
   const [snapshotPublishOpen, setSnapshotPublishOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareSession, setShareSession] = useState(0);
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [projectDialogSession, setProjectDialogSession] = useState(0);
@@ -1427,15 +1429,18 @@ export function RequirementWorkspace({
       });
   }, [initialProjectId, initialRequirementCode, initialVersionNumber, initialView, selectVersion, startInDetail]);
 
-  async function copyLink() {
+  async function copyLink(mode: "short" | "long") {
     if (!detail || !selectedVersion) return;
-    const url = `${window.location.origin}/r/${detail.requirement.code}${selectedVersion.id === detail.currentVersion.id ? "" : `?v=${selectedVersion.number}`}`;
     try {
+      const url = mode === "short"
+        ? (await request<{ url: string }>(`/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/public-share`, { method: "POST", body: JSON.stringify({ versionNo: selectedVersion.number }) })).url
+        : `${window.location.origin}/r/${encodeURIComponent(detail.requirement.code)}?${new URLSearchParams({ v: String(selectedVersion.number), returnTo: `/?view=requirements&project=${detail.project.id}` }).toString()}`;
       await copyText(url);
-      setCopyNotice("链接已复制");
+      setLinkDialogOpen(false);
+      setCopyNotice(mode === "short" ? "短期匿名预览链接已复制（7天有效）" : "长期访问链接已复制（登录后访问）");
       window.setTimeout(() => setCopyNotice(""), 2200);
     } catch {
-      setError("无法自动复制链接，请手动复制浏览器地址。");
+      setError(mode === "short" ? "无法生成短期预览链接，请刷新后重试。" : "无法复制长期访问链接，请重试。");
     }
   }
 
@@ -2288,8 +2293,9 @@ export function RequirementWorkspace({
                   </label>
                   <button
                     className="icon-button"
-                    onClick={() => void copyLink()}
-                    title="复制当前需求链接"
+                    onClick={() => setLinkDialogOpen(true)}
+                    title="复制需求链接"
+                    aria-label="复制需求链接"
                   >
                     <Icon name="link" />
                   </button>
@@ -2575,8 +2581,16 @@ export function RequirementWorkspace({
         open={shareOpen}
         requirementCode={detail?.requirement.code ?? ""}
         requirementTitle={detail?.requirement.title ?? ""}
+        versionNumber={selectedVersion?.number}
         onClose={() => setShareOpen(false)}
         onSent={showNotice}
+      />
+      <RequirementLinkDialog
+        open={linkDialogOpen}
+        requirementTitle={detail?.requirement.title ?? ""}
+        versionNumber={selectedVersion?.number ?? detail?.currentVersion.number ?? 1}
+        onClose={() => setLinkDialogOpen(false)}
+        onCopy={copyLink}
       />
       <ProjectDialog
         key={`${editingProject?.id ?? "new"}-${projectDialogSession}`}

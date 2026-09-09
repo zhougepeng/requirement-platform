@@ -32,12 +32,14 @@ export function RequirementShareDialog({
   open,
   requirementCode,
   requirementTitle,
+  versionNumber,
   onClose,
   onSent,
 }: {
   open: boolean;
   requirementCode: string;
   requirementTitle: string;
+  versionNumber?: number;
   onClose: () => void;
   onSent: (message: string) => void;
 }) {
@@ -48,10 +50,15 @@ export function RequirementShareDialog({
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [requirementUrl, setRequirementUrl] = useState("");
 
   useEffect(() => {
     if (!open) return;
     let active = true;
+    setRequirementUrl(`${window.location.origin}/r/${encodeURIComponent(requirementCode)}`);
+    void request<{ url: string }>(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/public-share`, { method: "POST", body: JSON.stringify({ versionNo: versionNumber }) })
+      .then((result) => { if (active) setRequirementUrl(result.url); })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法生成匿名预览链接。 "); });
     void request<NotificationTargetCatalog>("/api/v1/release-notifications/targets")
       .then((catalog) => {
         if (!active) return;
@@ -67,7 +74,7 @@ export function RequirementShareDialog({
     return () => {
       active = false;
     };
-  }, [open]);
+  }, [open, requirementCode, versionNumber]);
 
   const candidates = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -78,8 +85,6 @@ export function RequirementShareDialog({
   }, [options, query, targets]);
 
   if (!open || typeof document === "undefined") return null;
-  const requirementUrl = `${window.location.origin}/r/${encodeURIComponent(requirementCode)}`;
-
   function add(target: NotificationTarget) {
     setTargets((current) => [...current, target]);
     setQuery("");
@@ -111,7 +116,7 @@ export function RequirementShareDialog({
     <div className="release-status-dialog-layer" onClick={() => !sending && onClose()}>
       <button className="release-status-dialog-backdrop" aria-label="关闭分享需求" />
       <section className="release-status-dialog requirement-share-dialog" role="dialog" aria-modal="true" aria-labelledby="requirement-share-title" onClick={(event) => event.stopPropagation()}>
-        <header><div><h2 id="requirement-share-title">分享需求</h2><small>选择人员、群聊、部门或全员后发送当前需求链接。</small></div><button type="button" className="release-status-close" onClick={onClose} aria-label="关闭"><Icon name="close" /></button></header>
+        <header><div><h2 id="requirement-share-title">分享需求</h2><small>发送匿名只读预览链接，对方无需登录即可查看当前版本。</small></div><button type="button" className="release-status-close" onClick={onClose} aria-label="关闭"><Icon name="close" /></button></header>
         <div className="release-status-dialog-body">
           <div className="requirement-share-preview"><Icon name="file" /><div><b>{requirementTitle}</b><small>{requirementUrl}</small></div></div>
           <label className="release-notification-label">接收对象

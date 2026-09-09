@@ -1,6 +1,6 @@
 import type { ReactNode, SVGProps } from "react";
 
-type IconName = "book" | "folder" | "search" | "chevron" | "link" | "external" | "desktop" | "mobile" | "send" | "plus" | "arrow" | "message" | "messages" | "check" | "file" | "star" | "settings" | "trash" | "close" | "users" | "refresh" | "edit" | "download" | "sparkles";
+type IconName = "book" | "folder" | "search" | "chevron" | "link" | "external" | "desktop" | "mobile" | "send" | "plus" | "minus" | "zoomOut" | "maximize" | "minimize" | "arrow" | "message" | "messages" | "check" | "file" | "star" | "settings" | "trash" | "close" | "users" | "refresh" | "edit" | "download" | "sparkles";
 
 const paths: Record<IconName, ReactNode> = {
   book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M4 5.5v16"/><path d="M8 7h8M8 11h6"/></>,
@@ -13,6 +13,10 @@ const paths: Record<IconName, ReactNode> = {
   mobile: <rect x="7" y="2" width="10" height="20" rx="2"/>,
   send: <><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></>,
   plus: <path d="M12 5v14M5 12h14"/>,
+  minus: <path d="M5 12h14"/>,
+  zoomOut: <><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5M8 10.8h5.6"/></>,
+  maximize: <><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/><path d="m3 8 5-5M16 3l5 5M21 16l-5 5M8 21l-5-5"/></>,
+  minimize: <><path d="M9 3v6H3M15 3v6h6M21 15h-6v6M3 15h6v6"/></>,
   arrow: <><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></>,
   message: <path d="M21 11.5a8.38 8.38 0 0 1-9 8.46 8.5 8.5 0 0 1-3.8-.9L3 21l1.7-4.2A8.5 8.5 0 1 1 21 11.5Z"/>,
   messages: <><path d="M8.5 17.5a6.5 6.5 0 1 1 5.1-2.47L16 18l-3.4-.85a6.5 6.5 0 0 1-4.1.35Z"/><path d="M15.5 8.5a6.5 6.5 0 0 1 5.1 10.53L22 21l-3.4-.85a6.5 6.5 0 0 1-4.1.35"/></>,
