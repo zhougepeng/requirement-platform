@@ -39,7 +39,20 @@ export async function middleware(request: NextRequest) {
   // Signed preview assets authenticate inside the route with a short-lived token.
   // They must bypass the session redirect so sandboxed iframes can load CSS/JS
   // without cookies; invalid or expired tokens still receive a 404 from the route.
-  if (path === "/login" || path.startsWith("/auth/") || path.startsWith("/api/auth/") || path === "/api/health" || path === "/mcp" || path.startsWith("/demo-preview/")) return NextResponse.next();
+  // Public short-lived requirement shares authenticate themselves with the
+  // signed share token inside the page/API route. They must stay reachable
+  // without a Feishu session; otherwise the middleware redirects the preview
+  // to login before the token can be verified.
+  if (
+    path === "/login" ||
+    path.startsWith("/auth/") ||
+    path.startsWith("/api/auth/") ||
+    path === "/api/health" ||
+    path === "/mcp" ||
+    path.startsWith("/demo-preview/") ||
+    path.startsWith("/share/") ||
+    path.startsWith("/api/public/requirements/share/")
+  ) return NextResponse.next();
   if (hasBearerAccessToken(request)) return NextResponse.next();
   if (await hasValidSession(request.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();
   if (path.startsWith("/api/")) return NextResponse.json({ error: "请先使用飞书登录。" }, { status: 401 });

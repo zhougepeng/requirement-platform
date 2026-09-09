@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import mermaid from "mermaid";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -212,17 +212,100 @@ function FlowchartFallback({ source }: { source: string }) {
 }
 
 function DiagramViewport({ svg, className = "" }: { svg: string; className?: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; startLeft: number; startTop: number; didDrag: boolean } | null>(null);
   const [scale, setScale] = useState(100);
   const [fullscreen, setFullscreen] = useState(false);
-  return <div className={`mermaid-diagram ${className}${fullscreen ? " is-fullscreen" : ""}`}>
+  const [dragging, setDragging] = useState(false);
+  const [focusSize, setFocusSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFullscreen(false);
+    };
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const container = containerRef.current;
+      if (container && !container.contains(event.target as Node)) setFullscreen(false);
+    };
+    document.body.classList.add("mermaid-focus-open");
+    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    return () => {
+      document.body.classList.remove("mermaid-focus-open");
+      document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+    };
+  }, [fullscreen]);
+
+  const toggleFullscreen = () => {
+    if (fullscreen) {
+      setFullscreen(false);
+      return;
+    }
+    const container = containerRef.current;
+    const diagram = container?.querySelector("svg");
+    if (!diagram) return;
+    const viewBox = diagram.viewBox?.baseVal;
+    const measuredWidth = diagram.getBoundingClientRect().width;
+    const measuredHeight = diagram.getBoundingClientRect().height;
+    const naturalWidth = viewBox?.width || measuredWidth;
+    const naturalHeight = viewBox?.height || measuredHeight;
+    const availableWidth = Math.max(360, window.innerWidth - 40);
+    const availableHeight = Math.max(260, window.innerHeight - 48);
+    const width = Math.min(availableWidth, Math.max(360, (naturalWidth * scale) / 100 + 36));
+    const height = Math.min(
+      availableHeight,
+      Math.max(260, ((width - 36) * naturalHeight) / Math.max(1, naturalWidth) + 60),
+    );
+    setFocusSize({ width: Math.round(width), height: Math.round(height) });
+    setFullscreen(true);
+  };
+
+  const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest(".mermaid-controls")) return;
+    event.preventDefault();
+    setScale((value) => Math.max(25, Math.min(500, value + (event.deltaY < 0 ? 10 : -10))));
+  };
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || (event.target as Element).closest(".mermaid-controls")) return;
+    const container = containerRef.current;
+    if (!container) return;
+    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, startLeft: container.scrollLeft, startTop: container.scrollTop, didDrag: false };
+    setDragging(true);
+    container.setPointerCapture?.(event.pointerId);
+  };
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    const container = containerRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !container) return;
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) drag.didDrag = true;
+    container.scrollLeft = drag.startLeft - deltaX;
+    container.scrollTop = drag.startTop - deltaY;
+  };
+  const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    const container = containerRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (container?.hasPointerCapture?.(drag.pointerId)) container.releasePointerCapture(drag.pointerId);
+    dragRef.current = null;
+    setDragging(false);
+  };
+
+  const focusStyle = fullscreen && focusSize.width
+    ? ({ "--mermaid-focus-width": `${focusSize.width}px`, "--mermaid-focus-height": `${focusSize.height}px` } as CSSProperties)
+    : undefined;
+
+  return <div ref={containerRef} style={focusStyle} className={`mermaid-diagram ${className}${fullscreen ? " is-mermaid-focused" : ""}${dragging ? " is-dragging" : ""}`} onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishPointer} onPointerCancel={finishPointer} onDragStart={(event) => event.preventDefault()}>
     <div className="mermaid-controls" role="toolbar" aria-label="流程图查看工具">
-      <button type="button" className="mermaid-zoom-button" onClick={() => setScale((value) => Math.max(50, value - 25))} title="缩小流程图" aria-label="缩小流程图">-</button>
+      <button type="button" className="mermaid-zoom-button" onClick={() => setScale((value) => Math.max(25, value - 25))} title="缩小流程图" aria-label="缩小流程图"><Icon name="zoomOut" /></button>
       <button type="button" onClick={() => setScale(100)} title="还原流程图大小" aria-label="还原流程图大小"><Icon name="refresh" /></button>
-      <button type="button" onClick={() => setScale((value) => Math.min(250, value + 25))} title="放大流程图" aria-label="放大流程图"><Icon name="plus" /></button>
-      <button type="button" onClick={() => setFullscreen((value) => !value)} title={fullscreen ? "退出完整流程图" : "展开完整流程图"} aria-label={fullscreen ? "退出完整流程图" : "展开完整流程图"}><Icon name="external" /></button>
+      <button type="button" onClick={() => setScale((value) => Math.min(500, value + 25))} title="放大流程图" aria-label="放大流程图"><Icon name="plus" /></button>
+      <button type="button" onClick={toggleFullscreen} title={fullscreen ? "退出完整流程图" : "展开完整流程图"} aria-label={fullscreen ? "退出完整流程图" : "展开完整流程图"}><Icon name={fullscreen ? "minimize" : "maximize"} /></button>
     </div>
     <div className="mermaid-canvas" style={{ zoom: scale / 100 } as CSSProperties} dangerouslySetInnerHTML={{ __html: svg }} />
-    {fullscreen ? <button type="button" className="mermaid-fullscreen-dismiss" onClick={() => setFullscreen(false)} aria-label="关闭完整流程图" /> : null}
   </div>;
 }
 
