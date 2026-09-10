@@ -13,7 +13,7 @@ export default async function PublicSharePage({ params }: { params: Promise<{ to
     const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host") || "127.0.0.1:3300";
     const protocol = requestHeaders.get("x-forwarded-proto")?.split(",")[0]?.trim() || "http";
     const payload = await getPublicRequirementSharePayload(token, `${protocol}://${host}`);
-    return <PublicRequirementPreview payload={payload} />;
+    return <><link rel="alternate" type="text/markdown" href={payload.markdownUrl} /><PublicRequirementPreview payload={payload} /></>;
   } catch {
     notFound();
   }

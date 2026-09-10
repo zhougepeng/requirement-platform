@@ -7,6 +7,7 @@ import { Icon } from "@/components/icons";
 type PublicSharePayload = {
   publicUrl: string;
   apiUrl: string;
+  markdownUrl: string;
   expiresAt: number;
   backUrl: string;
   project: { id: string; name: string };
@@ -24,6 +25,8 @@ export function PublicRequirementPreview({ payload }: { payload: PublicSharePayl
   const statusLabel = payload.requirement.status === "online" ? "已上线" : payload.requirement.status === "scheduled" ? "已排期" : "未上线";
 
   return <main className="public-share-page">
+    <meta name="ai-context-url" content={payload.markdownUrl} />
+    <meta name="ai-context-api" content={payload.apiUrl} />
     <header className="public-share-topbar">
       <div className="public-share-leading"><a className="public-share-back-icon" href={payload.backUrl} aria-label="返回需求库"><Icon name="arrow" /></a><h1>{payload.requirement.title}</h1><span className="public-share-status">{statusLabel}</span></div>
       <nav className="public-share-tabs" aria-label="预览内容">

@@ -15,6 +15,8 @@ export type PublicRequirementShareClaims = {
   expiresAt: number;
 };
 
+export type PublicRequirementSharePayload = Awaited<ReturnType<typeof getPublicRequirementSharePayload>>;
+
 function signingSecret() {
   const configured = process.env.PUBLIC_SHARE_TOKEN_SECRET || process.env.AUTH_SESSION_SECRET;
   if (configured && configured.length >= 32) return configured;
@@ -89,9 +91,11 @@ export async function getPublicRequirementSharePayload(token: string, origin: st
   const demoUrl = publicDemoUrl(version.demoEntryUrl, origin);
   const publicUrl = `${origin}/share/${encodeURIComponent(token)}`;
   const apiUrl = `${origin}/api/public/requirements/share/${encodeURIComponent(token)}`;
+  const markdownUrl = `${origin}/share/${encodeURIComponent(token)}/llm.txt`;
   return {
     publicUrl,
     apiUrl,
+    markdownUrl,
     expiresAt: claims.expiresAt,
     backUrl: `/?view=requirements&project=${encodeURIComponent(detail.project.id)}`,
     project: { id: detail.project.id, name: detail.project.name },
@@ -106,6 +110,8 @@ export async function getPublicRequirementSharePayload(token: string, origin: st
       versionNo: version.number,
       prd: documents,
       demoUrl,
+      apiUrl,
+      markdownUrl,
       note: "这是只读预览分享。请结合 PRD 与 Demo 页面分析，不要执行写入或发布操作。",
     },
   };
