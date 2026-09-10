@@ -8,13 +8,14 @@ export const metadata = { title: "需求预览 · 需求平台" };
 
 export default async function PublicSharePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
+  let payload;
   try {
     const requestHeaders = await headers();
     const host = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim() || requestHeaders.get("host") || "127.0.0.1:3300";
     const protocol = requestHeaders.get("x-forwarded-proto")?.split(",")[0]?.trim() || "http";
-    const payload = await getPublicRequirementSharePayload(token, `${protocol}://${host}`);
-    return <><link rel="alternate" type="text/markdown" href={payload.markdownUrl} /><PublicRequirementPreview payload={payload} /></>;
+    payload = await getPublicRequirementSharePayload(token, `${protocol}://${host}`);
   } catch {
     notFound();
   }
+  return <><link rel="alternate" type="text/markdown" href={payload.markdownUrl} /><PublicRequirementPreview payload={payload} /></>;
 }

@@ -51,11 +51,11 @@ export function RequirementShareDialog({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [requirementUrl, setRequirementUrl] = useState("");
+  const fallbackRequirementUrl = useMemo(() => typeof window === "undefined" ? "" : `${window.location.origin}/r/${encodeURIComponent(requirementCode)}`, [requirementCode]);
 
   useEffect(() => {
     if (!open) return;
     let active = true;
-    setRequirementUrl(`${window.location.origin}/r/${encodeURIComponent(requirementCode)}`);
     void request<{ url: string }>(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/public-share`, { method: "POST", body: JSON.stringify({ versionNo: versionNumber }) })
       .then((result) => { if (active) setRequirementUrl(result.url); })
       .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "无法生成匿名预览链接。 "); });
@@ -118,7 +118,7 @@ export function RequirementShareDialog({
       <section className="release-status-dialog requirement-share-dialog" role="dialog" aria-modal="true" aria-labelledby="requirement-share-title" onClick={(event) => event.stopPropagation()}>
         <header><div><h2 id="requirement-share-title">分享需求</h2><small>发送匿名只读预览链接，对方无需登录即可查看当前版本。</small></div><button type="button" className="release-status-close" onClick={onClose} aria-label="关闭"><Icon name="close" /></button></header>
         <div className="release-status-dialog-body">
-          <div className="requirement-share-preview"><Icon name="file" /><div><b>{requirementTitle}</b><small>{requirementUrl}</small></div></div>
+          <div className="requirement-share-preview"><Icon name="file" /><div><b>{requirementTitle}</b><small>{requirementUrl || fallbackRequirementUrl}</small></div></div>
           <label className="release-notification-label">接收对象
             <div className="release-notification-chips">{targets.length ? targets.map((target) => <span className="release-notification-chip" key={keyOf(target)}><small>{kindLabel(target)}</small>{target.name}<button type="button" onClick={() => remove(target)} aria-label={`移除 ${target.name}`}>×</button></span>) : <span className="release-notification-empty">尚未选择接收对象</span>}</div>
           </label>
