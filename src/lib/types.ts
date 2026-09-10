@@ -165,6 +165,8 @@ export type RequirementSummary = {
   scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
+  assignedDeveloperIds?: string[];
+  assignedTesterIds?: string[];
 };
 
 export type Project = {
@@ -200,8 +202,16 @@ export type Requirement = {
   scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
+  assignedDeveloperIds?: string[];
+  assignedTesterIds?: string[];
   /** Optional primary product used as PRD/Demo generation context. */
   productId?: string;
+};
+
+export type AssignedRequirement = RequirementSummary & {
+  projectId: string;
+  projectName: string;
+  assignmentRoles: Array<"developer" | "tester">;
 };
 
 export type Product = {

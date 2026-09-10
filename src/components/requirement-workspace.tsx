@@ -30,6 +30,7 @@ import {
 } from "@/components/requirement-release-status";
 import type {
   Project,
+  AssignedRequirement,
   HtmlCommentAnchor,
   PrdCommentAnchor,
   RequirementComment,
@@ -44,7 +45,7 @@ import type {
 } from "@/lib/types";
 
 type Tab = "demo" | "prd" | "split" | "test-cases" | "versions";
-type View = "board" | "detail" | "projects" | "requirements" | "materials" | "my-requirements";
+type View = "board" | "detail" | "projects" | "requirements" | "materials" | "my-requirements" | "assigned";
 export type WorkspaceView = Exclude<View, "detail">;
 type ApiResponse<T> =
   { data: T; error?: never } | { data?: never; error: string };
@@ -56,6 +57,7 @@ type CurrentUser = {
   enabled?: boolean;
   pendingApproval?: boolean;
   canPublish?: boolean;
+  role?: "none" | "viewer" | "publisher" | "admin";
   isAdmin?: boolean;
 };
 type ProjectContextMenu = {
@@ -101,6 +103,11 @@ type MyRequirementProjectGroup = {
   key: string;
   label: string;
   items: MyRequirement[];
+};
+type AssignedRequirementMonth = {
+  key: string;
+  label: string;
+  items: AssignedRequirement[];
 };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -356,11 +363,7 @@ function RequirementBoard({
     const byMonth = new Map(buckets.map((bucket) => [bucket.key, bucket]));
     for (const project of projects) {
       for (const requirement of project.requirements) {
-        const date = requirement.status === "online"
-          ? requirement.releaseDate
-          : requirement.status === "scheduled"
-            ? requirement.scheduledFullDate ?? requirement.scheduledGrayDate
-            : undefined;
+        const date = currentReleaseDate(requirement);
         const month = date?.slice(0, 7);
         if (!month) continue;
         const item = {
@@ -446,6 +449,20 @@ function RequirementBoard({
       <RequirementTimeline onOpenRequirement={onOpenRequirement} refreshKey={projects} />
     </div>
   );
+}
+
+function currentReleaseDate(requirement: RequirementSummary) {
+  const date = requirement.status === "online"
+    ? requirement.releaseDate
+    : requirement.status === "scheduled"
+      ? requirement.scheduledFullDate ?? requirement.scheduledGrayDate
+      : undefined;
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined;
+  const [year, month, day] = date.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day
+    ? date
+    : undefined;
 }
 
 function RequirementTimeline({ onOpenRequirement, refreshKey }: { onOpenRequirement: (requirementCode: string) => void; refreshKey: Project[] }) {
@@ -796,19 +813,21 @@ function MyRequirements({
       {loading ? <p className="my-requirements-empty">正在加载我的需求...</p> : loadError ? (
         <p className="my-requirements-empty is-error">{loadError}</p>
       ) : <>
-        <section className="my-requirements-section" aria-label="未上线需求">
+        <section className="my-requirements-section my-requirements-timeline" aria-label="未上线需求">
           <header><div><Icon name="file" /><b>未上线</b><small>{offlineRequirements.length}</small></div></header>
-          {offlineRequirements.length ? offlineRequirementGroups.map((group) => <article className="my-requirements-project-group" key={group.key}>
-            <header>
-              <div><Icon name="folder" /><b title={group.label}>{group.label}</b></div>
+          {offlineRequirements.length ? offlineRequirementGroups.map((group) => <article className="timeline-group my-requirements-offline-group" key={group.key}>
+            <aside>
+              <b title={group.label}>{group.label}</b>
               <small>{group.items.length} 个需求</small>
-            </header>
-            <div className="my-requirements-list">
-              <div className="my-requirements-head"><span>需求名称</span><span>创建时间</span></div>
-              {group.items.map((requirement) => <button key={requirement.code} type="button" onClick={() => onOpenRequirement(requirement.code)}>
-                <span><small>{requirement.code}</small><b title={requirement.title}>{requirement.title}</b></span>
-                <time>{requirement.createdAt ?? "--"}</time>
-              </button>)}
+            </aside>
+            <div className="timeline-group-content">
+              <div className="my-requirements-list">
+                <div className="my-requirements-head"><span>需求名称</span><span>创建时间</span></div>
+                {group.items.map((requirement) => <button key={requirement.code} type="button" onClick={() => onOpenRequirement(requirement.code)}>
+                  <span><small>{requirement.code}</small><b title={requirement.title}>{requirement.title}</b></span>
+                  <time>{requirement.createdAt ?? "--"}</time>
+                </button>)}
+              </div>
             </div>
           </article>) : <p className="my-requirements-empty">暂无未上线需求。</p>}
         </section>
@@ -817,6 +836,61 @@ function MyRequirements({
       </>}
     </section>
   );
+}
+
+function groupAssignedRequirements(requirements: AssignedRequirement[]): AssignedRequirementMonth[] {
+  const groups = new Map<string, AssignedRequirementMonth>();
+  for (const requirement of requirements) {
+    const date = requirement.scheduledFullDate ?? requirement.scheduledGrayDate;
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const key = date.slice(0, 7);
+    const month = Number(date.slice(5, 7));
+    const group = groups.get(key) ?? { key, label: `${month}月`, items: [] };
+    group.items.push(requirement);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .map((group) => ({ ...group, items: group.items.toSorted((left, right) => (left.scheduledFullDate ?? left.scheduledGrayDate ?? "").localeCompare(right.scheduledFullDate ?? right.scheduledGrayDate ?? "") || left.title.localeCompare(right.title) || left.code.localeCompare(right.code)) }))
+    .toSorted((left, right) => left.key.localeCompare(right.key));
+}
+
+function AssignedRequirements({ onOpenRequirement }: { onOpenRequirement: (requirementCode: string) => void }) {
+  const [requirements, setRequirements] = useState<AssignedRequirement[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    void request<AssignedRequirement[]>("/api/v1/requirements/assigned")
+      .then((items) => { if (!cancelled) { setRequirements(items); setLoadError(""); } })
+      .catch((reason) => { if (!cancelled) setLoadError(reason instanceof Error ? reason.message : "无法读取指派给你的需求。"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+  const groups = useMemo(() => groupAssignedRequirements(requirements), [requirements]);
+  return <section className="my-requirements-page assigned-requirements-page" aria-label="指派我的">
+    <header>
+      <h1>指派我的</h1>
+      <div className="my-requirements-overview">
+        <div className="board-metric is-scheduled"><span className="board-metric-icon"><Icon name="file" /></span><div><small>已排期需求</small><b>{requirements.length}</b></div></div>
+      </div>
+    </header>
+    {loading ? <p className="my-requirements-empty">正在加载指派给你的需求...</p> : loadError ? <p className="my-requirements-empty is-error">{loadError}</p> : <section className="my-requirements-section my-requirements-timeline" aria-label="指派我的需求时间线">
+      <header><div><Icon name="file" /><b>需求详细时间线</b><small>{requirements.length}</small></div><span>仅显示已排期且指派给我的需求</span></header>
+      {groups.length ? groups.map((group) => <article className="timeline-group" key={group.key}>
+        <aside><b>{group.label}</b><small>{group.items.length} 个需求</small></aside>
+        <div className="timeline-group-content">{group.items.map((requirement) => {
+          const date = requirement.scheduledFullDate ?? requirement.scheduledGrayDate!;
+          const roles = requirement.assignmentRoles.map((role) => role === "developer" ? "研发" : "测试").join(" / ");
+          return <button className="timeline-item" key={requirement.code} onClick={() => onOpenRequirement(requirement.code)}>
+            <time>{date.slice(8, 10)}日</time>
+            <span><strong>{requirement.title}</strong><small>{requirement.projectName} · 负责{roles}</small></span>
+            <span className="timeline-item-meta"><b>排期版本 {requirement.scheduleVersion || "--"}</b><small>预计上线 {date}</small></span>
+            <Icon name="chevron" />
+          </button>;
+        })}</div>
+      </article>) : <p className="my-requirements-empty">暂无指派给你的已排期需求。</p>}
+    </section>}
+  </section>;
 }
 
 function RequirementList({
@@ -1453,7 +1527,7 @@ export function RequirementWorkspace({
           const nextProjects = await projectsPromise;
           setProjects(nextProjects);
           setActiveProjectId(initialProjectId ?? "");
-          setView(initialView ?? "board");
+          setView(initialView ?? (user.canPublish ? "my-requirements" : "assigned"));
         }
         setLoading(false);
       })
@@ -1470,7 +1544,7 @@ export function RequirementWorkspace({
     try {
       const url = mode === "short"
         ? (await request<{ url: string }>(`/api/v1/requirements/${encodeURIComponent(detail.requirement.code)}/public-share`, { method: "POST", body: JSON.stringify({ versionNo: selectedVersion.number }) })).url
-        : `${window.location.origin}/r/${encodeURIComponent(detail.requirement.code)}?${new URLSearchParams({ v: String(selectedVersion.number), returnTo: `/?view=requirements&project=${detail.project.id}` }).toString()}`;
+      : `${window.location.origin}/r/${encodeURIComponent(detail.requirement.code)}?${new URLSearchParams({ v: String(selectedVersion.number), returnTo: initialReturnTo ?? `/?view=${currentUser.canPublish ? "my-requirements" : "assigned"}` }).toString()}`;
       await copyText(url);
       setLinkDialogOpen(false);
       setCopyNotice(mode === "short" ? "短期匿名预览链接已复制（7天有效）" : "长期访问链接已复制（登录后访问）");
@@ -1698,6 +1772,8 @@ export function RequirementWorkspace({
               scheduledFullDate: updated.scheduledFullDate,
               releaseVersion: updated.releaseVersion,
               releaseDate: updated.releaseDate,
+              assignedDeveloperIds: updated.assignedDeveloperIds,
+              assignedTesterIds: updated.assignedTesterIds,
               updatedAt: updated.updatedAt,
             }
           : item,
@@ -1843,12 +1919,19 @@ export function RequirementWorkspace({
             </button>
           </div>
           <nav className="sidebar-nav">
-            <button
-              className={`nav-item ${view === "board" ? "is-selected" : ""}`}
-              onClick={() => setView("board")}
+          <button
+            className={`nav-item ${view === "board" ? "is-selected" : ""}`}
+            onClick={() => setView("board")}
             >
               <Icon name="book" />
               <span>需求看板</span>
+            </button>
+            <button
+              className={`nav-item ${view === "assigned" ? "is-selected" : ""}`}
+              onClick={() => setView("assigned")}
+            >
+              <Icon name="users" />
+              <span>指派我的</span>
             </button>
             {currentUser.canPublish ? (
               <button
@@ -2127,6 +2210,8 @@ export function RequirementWorkspace({
             }}
             onOpenRequirement={openRequirement}
           />
+        ) : view === "assigned" ? (
+          <AssignedRequirements onOpenRequirement={openRequirement} />
         ) : view === "my-requirements" && currentUser.canPublish ? (
           <MyRequirements
             onOpenRequirement={openRequirement}
@@ -2169,8 +2254,7 @@ export function RequirementWorkspace({
                     onClick={() => {
                       if (startInDetail) {
                         if (initialReturnTo) router.push(initialReturnTo);
-                        else if (window.history.length > 1) router.back();
-                        else router.push("/");
+                        else router.push(`/?view=${currentUser.canPublish ? "my-requirements" : "assigned"}`);
                       }
                       else setView("requirements");
                     }}

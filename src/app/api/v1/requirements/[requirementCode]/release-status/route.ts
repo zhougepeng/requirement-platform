@@ -14,7 +14,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ re
     const actor = await publisherFromRequest(request);
     const { requirementCode } = await params;
     const before = await getRequirementDetail(requirementCode);
-    const body = await request.json() as { status?: unknown; scheduleVersion?: unknown; scheduledGrayDate?: unknown; scheduledFullDate?: unknown; releaseVersion?: unknown; releaseDate?: unknown };
+    const body = await request.json() as { status?: unknown; scheduleVersion?: unknown; scheduledGrayDate?: unknown; scheduledFullDate?: unknown; releaseVersion?: unknown; releaseDate?: unknown; assignedDeveloperIds?: unknown; assignedTesterIds?: unknown };
     const status = body.status === "online" || body.status === "scheduled" || body.status === "offline" ? body.status : undefined;
     if (!status) throw new Error("需求状态无效。");
     const updated = await updateRequirementReleaseStatus(requirementCode, {
@@ -24,6 +24,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ re
       scheduledFullDate: typeof body.scheduledFullDate === "string" ? body.scheduledFullDate : undefined,
       releaseVersion: typeof body.releaseVersion === "string" ? body.releaseVersion : undefined,
       releaseDate: typeof body.releaseDate === "string" ? body.releaseDate : undefined,
+      assignedDeveloperIds: Array.isArray(body.assignedDeveloperIds) ? body.assignedDeveloperIds.filter((item): item is string => typeof item === "string") : undefined,
+      assignedTesterIds: Array.isArray(body.assignedTesterIds) ? body.assignedTesterIds.filter((item): item is string => typeof item === "string") : undefined,
     });
     scheduleRequirementKnowledgeSync(requirementCode);
     if (updated.status === "online" && before.requirement.status !== "online") {

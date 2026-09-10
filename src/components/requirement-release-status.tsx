@@ -14,9 +14,12 @@ export type UpdateRequirementReleaseStatusInput = {
   scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
+  assignedDeveloperIds?: string[];
+  assignedTesterIds?: string[];
 };
-type RequirementWithStatus = Pick<Requirement, "status" | "scheduleVersion" | "scheduledGrayDate" | "scheduledFullDate" | "releaseVersion" | "releaseDate"> | Pick<RequirementSummary, "status" | "scheduleVersion" | "scheduledGrayDate" | "scheduledFullDate" | "releaseVersion" | "releaseDate">;
+type RequirementWithStatus = Pick<Requirement, "status" | "scheduleVersion" | "scheduledGrayDate" | "scheduledFullDate" | "releaseVersion" | "releaseDate" | "assignedDeveloperIds" | "assignedTesterIds"> | Pick<RequirementSummary, "status" | "scheduleVersion" | "scheduledGrayDate" | "scheduledFullDate" | "releaseVersion" | "releaseDate" | "assignedDeveloperIds" | "assignedTesterIds">;
 type NotificationTargetCatalog = { targets: NotificationTarget[]; warnings: string[] };
+type AssigneeOption = { id: string; name: string };
 
 function today() { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
 function keyOf(target: NotificationTarget) { return `${target.kind}:${target.id}`; }
@@ -91,6 +94,9 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
   const [scheduleVersion, setScheduleVersion] = useState(requirement.scheduleVersion ?? "");
   const [scheduledGrayDate, setScheduledGrayDate] = useState(requirement.scheduledGrayDate ?? today());
   const [scheduledFullDate, setScheduledFullDate] = useState(requirement.scheduledFullDate ?? today());
+  const [developerIds, setDeveloperIds] = useState<string[]>(requirement.assignedDeveloperIds ?? []);
+  const [testerIds, setTesterIds] = useState<string[]>(requirement.assignedTesterIds ?? []);
+  const [assignmentOptions, setAssignmentOptions] = useState<AssigneeOption[]>([]);
   const [notifyEnabled, setNotifyEnabled] = useState(true);
   const [targets, setTargets] = useState<NotificationTarget[]>([]);
   const [targetOptions, setTargetOptions] = useState<NotificationTarget[]>([]);
@@ -104,21 +110,24 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
   const [notice, setNotice] = useState("");
   const [editingStatus, setEditingStatus] = useState(false);
 
-  async function loadNotificationSetup() {
+  async function loadNotificationSetup(forEditing = false) {
     try {
       const [preference, catalog] = await Promise.all([
         apiRequest<ReleaseNotificationPreference>(`/api/v1/projects/${encodeURIComponent(projectId)}/release-notification-preference`),
         apiRequest<NotificationTargetCatalog>("/api/v1/release-notifications/targets"),
       ]);
-      setNotifyEnabled(preference.enabled); setTargets(preference.targets); setTargetOptions(catalog.targets); setTargetWarning(catalog.warnings.join(" "));
+      const users = catalog.targets.filter((target): target is NotificationTarget & { kind: "user" } => target.kind === "user").map((target) => ({ id: target.id, name: target.name }));
+      const assignedIds = new Set([...developerIds, ...testerIds]);
+      const assignedTargets = catalog.targets.filter((target) => target.kind === "user" && assignedIds.has(target.id));
+      setNotifyEnabled(forEditing ? false : (assignedTargets.length ? true : preference.enabled)); setTargets(assignedTargets.length ? [...preference.targets.filter((target) => target.kind !== "user"), ...assignedTargets] : preference.targets); setTargetOptions(catalog.targets); setAssignmentOptions(users); setTargetWarning(catalog.warnings.join(" "));
     } catch (reason) { setError(reason instanceof Error ? `通知对象读取失败：${reason.message}` : "通知对象读取失败。"); }
   }
 
   function openStatusDialog(kind: "online" | "scheduled", correction = false) {
-    setError(""); setNotice(""); setTargetWarning(""); setEditingStatus(correction); setNotifyEnabled(!correction); setTargets([]); setTargetOptions([]);
+    setError(""); setNotice(""); setTargetWarning(""); setEditingStatus(correction); setNotifyEnabled(!correction); setTargets([]); setTargetOptions([]); setAssignmentOptions([]); setDeveloperIds(requirement.assignedDeveloperIds ?? []); setTesterIds(requirement.assignedTesterIds ?? []);
     setReleaseVersion(requirement.releaseVersion ?? ""); setReleaseDate(requirement.releaseDate ?? today());
     setScheduleVersion(requirement.scheduleVersion ?? ""); setScheduledGrayDate(requirement.scheduledGrayDate ?? today()); setScheduledFullDate(requirement.scheduledFullDate ?? today());
-    setDialogKind(kind); if (!correction) void loadNotificationSetup();
+    setDialogKind(kind); if (!correction || kind === "scheduled") void loadNotificationSetup(correction);
   }
 
   async function selectStatus(next: RequirementStatusValue) {
@@ -141,7 +150,22 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
   function payload(kind: "online" | "scheduled"): UpdateRequirementReleaseStatusInput {
     return kind === "online"
       ? { status: "online", releaseVersion: releaseVersion.trim(), releaseDate: releaseDate.trim() }
-      : { status: "scheduled", scheduleVersion: scheduleVersion.trim(), scheduledGrayDate: scheduledGrayDate.trim(), scheduledFullDate: scheduledFullDate.trim() };
+      : { status: "scheduled", scheduleVersion: scheduleVersion.trim(), scheduledGrayDate: scheduledGrayDate.trim(), scheduledFullDate: scheduledFullDate.trim(), assignedDeveloperIds: developerIds, assignedTesterIds: testerIds };
+  }
+
+  function toggleAssignee(role: "developer" | "tester", id: string) {
+    const nextDeveloperIds = role === "developer"
+      ? (developerIds.includes(id) ? developerIds.filter((item) => item !== id) : [...developerIds, id])
+      : developerIds;
+    const nextTesterIds = role === "tester"
+      ? (testerIds.includes(id) ? testerIds.filter((item) => item !== id) : [...testerIds, id])
+      : testerIds;
+    setDeveloperIds(nextDeveloperIds);
+    setTesterIds(nextTesterIds);
+    const selectedIds = new Set([...nextDeveloperIds, ...nextTesterIds]);
+    const assigneeTargets = targetOptions.filter((target) => target.kind === "user" && selectedIds.has(target.id));
+    setTargets((current) => [...current.filter((target) => target.kind !== "user"), ...assigneeTargets]);
+    if (selectedIds.size) setNotifyEnabled(true);
   }
 
   async function buildDraft(kind: "online" | "scheduled") {
@@ -180,7 +204,7 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
     } catch (reason) { setError(`需求已${actionLabel(notificationKind)}，但飞书通知发送失败：${reason instanceof Error ? reason.message : "请稍后重试。"}`); } finally { setSending(false); }
   }
 
-  const statusDialog = dialogKind && typeof document !== "undefined" ? createPortal(<div className="release-status-dialog-layer" onClick={() => !saving && setDialogKind(null)}><button className="release-status-dialog-backdrop" aria-label="关闭状态设置" /><div className="release-status-dialog release-notification-dialog" role="dialog" aria-modal="true" aria-labelledby="release-status-dialog-title" onClick={(event) => event.stopPropagation()}><header><h2 id="release-status-dialog-title">{dialogKind === "online" ? "设置上线信息" : "设置排期信息"}</h2><button type="button" className="release-status-close" onClick={() => setDialogKind(null)} aria-label="关闭"><Icon name="close" /></button></header><div className="release-status-dialog-body">{dialogKind === "online" ? <><label>上线版本<input value={releaseVersion} onChange={(event) => setReleaseVersion(event.target.value)} placeholder="例如 V3.8.2" maxLength={80} autoFocus /></label><label>上线时间<input type="date" value={releaseDate} onChange={(event) => setReleaseDate(event.target.value)} /></label></> : <><label>排期版本<input value={scheduleVersion} onChange={(event) => setScheduleVersion(event.target.value)} placeholder="例如 V3.9.0" maxLength={80} autoFocus /></label><label>预计上线灰度时间<input type="date" value={scheduledGrayDate} onChange={(event) => setScheduledGrayDate(event.target.value)} /></label><label>预计上线全量时间<input type="date" value={scheduledFullDate} onChange={(event) => setScheduledFullDate(event.target.value)} /></label></>}<label className="release-notification-switch"><input type="checkbox" checked={notifyEnabled} onChange={(event) => setNotifyEnabled(event.target.checked)} /><span>{dialogKind === "online" ? "上线后发送飞书通知" : "排期后发送飞书通知"}</span></label>{notifyEnabled ? <label className="release-notification-label">通知对象<TargetPicker targets={targets} options={targetOptions} disabled={saving} onChange={setTargets} /></label> : null}{targetWarning ? <p className="release-notification-help is-warning">{targetWarning}</p> : null}{error ? <p className="release-status-error">{error}</p> : null}</div><footer><button type="button" className="release-status-cancel" onClick={() => setDialogKind(null)}>取消</button><button type="button" className="release-status-confirm" onClick={() => void confirmStatus()} disabled={saving}>{saving ? "保存中…" : `确认${actionLabel(dialogKind)}`}</button></footer></div></div>, document.body) : null;
+  const statusDialog = dialogKind && typeof document !== "undefined" ? createPortal(<div className="release-status-dialog-layer" onClick={() => !saving && setDialogKind(null)}><button className="release-status-dialog-backdrop" aria-label="关闭状态设置" /><div className="release-status-dialog release-notification-dialog" role="dialog" aria-modal="true" aria-labelledby="release-status-dialog-title" onClick={(event) => event.stopPropagation()}><header><h2 id="release-status-dialog-title">{dialogKind === "online" ? "设置上线信息" : "设置排期信息"}</h2><button type="button" className="release-status-close" onClick={() => setDialogKind(null)} aria-label="关闭"><Icon name="close" /></button></header><div className="release-status-dialog-body">{dialogKind === "online" ? <><label>上线版本<input value={releaseVersion} onChange={(event) => setReleaseVersion(event.target.value)} placeholder="例如 V3.8.2" maxLength={80} autoFocus /></label><label>上线时间<input type="date" value={releaseDate} onChange={(event) => setReleaseDate(event.target.value)} /></label></> : <><label>排期版本<input value={scheduleVersion} onChange={(event) => setScheduleVersion(event.target.value)} placeholder="例如 V3.9.0" maxLength={80} autoFocus /></label><label>预计上线灰度时间<input type="date" value={scheduledGrayDate} onChange={(event) => setScheduledGrayDate(event.target.value)} /></label><label>预计上线全量时间<input type="date" value={scheduledFullDate} onChange={(event) => setScheduledFullDate(event.target.value)} /></label><div className="release-assignee-grid"><fieldset className="release-assignee-field"><legend>负责研发（可多选）</legend>{assignmentOptions.length ? <div className="release-assignee-options">{assignmentOptions.map((option) => <label key={`developer-${option.id}`}><input type="checkbox" checked={developerIds.includes(option.id)} onChange={() => toggleAssignee("developer", option.id)} />{option.name}</label>)}</div> : <small>暂未读取到可指派员工，仍可保存排期。</small>}</fieldset><fieldset className="release-assignee-field"><legend>负责测试（可多选）</legend>{assignmentOptions.length ? <div className="release-assignee-options">{assignmentOptions.map((option) => <label key={`tester-${option.id}`}><input type="checkbox" checked={testerIds.includes(option.id)} onChange={() => toggleAssignee("tester", option.id)} />{option.name}</label>)}</div> : <small>暂未读取到可指派员工，仍可保存排期。</small>}</fieldset></div></>}{<label className="release-notification-switch"><input type="checkbox" checked={notifyEnabled} onChange={(event) => setNotifyEnabled(event.target.checked)} /><span>{dialogKind === "online" ? "上线后发送飞书通知" : "排期后发送飞书通知"}</span></label>}{notifyEnabled ? <label className="release-notification-label">通知对象<TargetPicker targets={targets} options={targetOptions} disabled={saving} onChange={setTargets} /></label> : null}{targetWarning ? <p className="release-notification-help is-warning">{targetWarning}</p> : null}{error ? <p className="release-status-error">{error}</p> : null}</div><footer><button type="button" className="release-status-cancel" onClick={() => setDialogKind(null)}>取消</button><button type="button" className="release-status-confirm" onClick={() => void confirmStatus()} disabled={saving}>{saving ? "保存中…" : `确认${actionLabel(dialogKind)}`}</button></footer></div></div>, document.body) : null;
   const notificationDialog = notificationKind && typeof document !== "undefined" ? createPortal(<div className="release-status-dialog-layer" onClick={() => !sending && setNotificationKind(null)}><button className="release-status-dialog-backdrop" aria-label="关闭通知确认" /><div className="release-status-dialog release-notification-dialog release-notification-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="release-notification-dialog-title" onClick={(event) => event.stopPropagation()}><header><div><h2 id="release-notification-dialog-title">确认{actionLabel(notificationKind)}通知</h2><small>发送前可修改通知对象和内容</small></div><button type="button" className="release-status-close" onClick={() => setNotificationKind(null)} aria-label="关闭"><Icon name="close" /></button></header><div className="release-status-dialog-body"><label className="release-notification-label">通知对象<TargetPicker targets={targets} options={targetOptions} disabled={sending} onChange={setTargets} /></label>{targetWarning ? <p className="release-notification-help is-warning">{targetWarning}</p> : null}<label className="release-notification-label">通知内容<textarea value={draft} disabled={draftLoading || sending} onChange={(event) => setDraft(event.target.value)} placeholder={draftLoading ? `正在根据当前需求生成${actionLabel(notificationKind)}通知…` : "请输入通知内容"} /></label>{draftLoading ? <p className="release-notification-help">正在根据当前需求的 PRD、Demo 和测试用例生成初稿…</p> : null}{draftHint ? <p className="release-notification-help is-warning">{draftHint}</p> : null}{error ? <p className="release-status-error">{error}</p> : null}</div><footer><button type="button" className="release-status-cancel" disabled={sending} onClick={() => setNotificationKind(null)}>暂不发送</button><button type="button" className="release-status-confirm" disabled={sending || draftLoading} onClick={() => void sendNotification()}>{sending ? "发送中…" : error ? "重新发送" : "发送通知"}</button></footer></div></div>, document.body) : null;
 
   const meta = status === "online" ? [requirement.releaseVersion, requirement.releaseDate].filter(Boolean).join(" · ") : status === "scheduled" ? [requirement.scheduleVersion, requirement.scheduledGrayDate && `灰度 ${requirement.scheduledGrayDate}`, requirement.scheduledFullDate && `全量 ${requirement.scheduledFullDate}`].filter(Boolean).join(" · ") : "";

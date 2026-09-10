@@ -73,6 +73,8 @@ export type UpdateRequirementReleaseStatusInput = {
   scheduledFullDate?: string;
   releaseVersion?: string;
   releaseDate?: string;
+  assignedDeveloperIds?: string[];
+  assignedTesterIds?: string[];
 };
 
 export type RequirementTimelineView = "month" | "version";
@@ -448,6 +450,8 @@ function projectWithRequirementSummaries(store: RequirementStore, project: Proje
       scheduledFullDate: requirement.scheduledFullDate,
       releaseVersion: requirement.releaseVersion,
       releaseDate: requirement.releaseDate,
+      assignedDeveloperIds: requirement.assignedDeveloperIds ?? summary.assignedDeveloperIds,
+      assignedTesterIds: requirement.assignedTesterIds ?? summary.assignedTesterIds,
       archivedAt: requirement.archivedAt,
       archivedBy: requirement.archivedBy,
     }];
@@ -1059,6 +1063,10 @@ function upsertCurrentTimelineEvent(store: RequirementStore, requirement: Requir
   store.timelineEvents.push(existing ? { ...next, id: existing.id, source: existing.source } : next);
 }
 
+function cleanAssignmentIds(value?: string[]) {
+  return Array.from(new Set((value ?? []).map((item) => item.trim()).filter(Boolean))).slice(0, 50);
+}
+
 export async function updateRequirementReleaseStatus(requirementCode: string, input: UpdateRequirementReleaseStatusInput) {
   const status = input.status;
   if (status !== "offline" && status !== "scheduled" && status !== "online") throw new Error("需求状态无效。");
@@ -1092,6 +1100,8 @@ export async function updateRequirementReleaseStatus(requirementCode: string, in
       requirement.scheduleVersion = scheduleVersion;
       requirement.scheduledGrayDate = scheduledGrayDate;
       requirement.scheduledFullDate = scheduledFullDate;
+      if (input.assignedDeveloperIds !== undefined) requirement.assignedDeveloperIds = cleanAssignmentIds(input.assignedDeveloperIds);
+      if (input.assignedTesterIds !== undefined) requirement.assignedTesterIds = cleanAssignmentIds(input.assignedTesterIds);
     }
     requirement.updatedAt = now();
     const summary = project.requirements.find((item) => item.code === requirementCode);
@@ -1102,6 +1112,8 @@ export async function updateRequirementReleaseStatus(requirementCode: string, in
       summary.scheduledFullDate = requirement.scheduledFullDate;
       summary.releaseVersion = requirement.releaseVersion;
       summary.releaseDate = requirement.releaseDate;
+      summary.assignedDeveloperIds = requirement.assignedDeveloperIds;
+      summary.assignedTesterIds = requirement.assignedTesterIds;
       summary.updatedAt = requirement.updatedAt;
     }
     project.updatedAt = requirement.updatedAt;
