@@ -97,6 +97,11 @@ type MyRequirementTimelineGroup = {
   label: string;
   items: MyRequirement[];
 };
+type MyRequirementProjectGroup = {
+  key: string;
+  label: string;
+  items: MyRequirement[];
+};
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -438,12 +443,12 @@ function RequirementBoard({
         })}
       </div>
       <BoardOwnerTable rows={ownerRows} />
-      <RequirementTimeline onOpenRequirement={onOpenRequirement} />
+      <RequirementTimeline onOpenRequirement={onOpenRequirement} refreshKey={projects} />
     </div>
   );
 }
 
-function RequirementTimeline({ onOpenRequirement }: { onOpenRequirement: (requirementCode: string) => void }) {
+function RequirementTimeline({ onOpenRequirement, refreshKey }: { onOpenRequirement: (requirementCode: string) => void; refreshKey: Project[] }) {
   const [view, setView] = useState<"month" | "version">("month");
   const [groups, setGroups] = useState<RequirementTimelineGroup[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
@@ -458,6 +463,7 @@ function RequirementTimeline({ onOpenRequirement }: { onOpenRequirement: (requir
         if (!active) return;
         setGroups(page.groups);
         setNextCursor(page.nextCursor);
+        setError("");
       })
       .catch((reason) => {
         if (active) setError(reason instanceof Error ? reason.message : "无法读取需求时间线。");
@@ -466,7 +472,7 @@ function RequirementTimeline({ onOpenRequirement }: { onOpenRequirement: (requir
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [view]);
+  }, [refreshKey, view]);
 
   const changeView = (nextView: "month" | "version") => {
     if (nextView === view) return;
@@ -577,6 +583,27 @@ function groupMyRequirementsByMonth(requirements: MyRequirement[], status: "sche
       }),
     }))
     .toSorted((left, right) => right.key.localeCompare(left.key));
+}
+
+function groupMyRequirementsByProject(requirements: MyRequirement[]): MyRequirementProjectGroup[] {
+  const groups = new Map<string, MyRequirementProjectGroup>();
+  for (const requirement of requirements) {
+    const label = (requirement.projectName ?? "").trim() || "未归属项目";
+    const key = requirement.projectId || `unassigned:${label}`;
+    const group = groups.get(key) ?? { key, label, items: [] };
+    group.items.push(requirement);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      items: group.items.toSorted((left, right) => (right.createdAt ?? "").localeCompare(left.createdAt ?? "") || left.code.localeCompare(right.code)),
+    }))
+    .toSorted((left, right) => {
+    const leftCreatedAt = left.items[0]?.createdAt ?? "";
+    const rightCreatedAt = right.items[0]?.createdAt ?? "";
+    return rightCreatedAt.localeCompare(leftCreatedAt) || left.label.localeCompare(right.label, "zh-CN");
+    });
 }
 
 function MyRequirementTimeline({
@@ -740,6 +767,10 @@ function MyRequirements({
     () => myRequirements.filter((requirement) => (requirement.status ?? "offline") === "offline"),
     [myRequirements],
   );
+  const offlineRequirementGroups = useMemo(
+    () => groupMyRequirementsByProject(offlineRequirements),
+    [offlineRequirements],
+  );
   const scheduledRequirements = useMemo(
     () => myRequirements.filter((requirement) => requirement.status === "scheduled"),
     [myRequirements],
@@ -767,14 +798,19 @@ function MyRequirements({
       ) : <>
         <section className="my-requirements-section" aria-label="未上线需求">
           <header><div><Icon name="file" /><b>未上线</b><small>{offlineRequirements.length}</small></div></header>
-          {offlineRequirements.length ? <div className="my-requirements-list">
-            <div className="my-requirements-head"><span>需求名称</span><span>所属项目</span><span>创建时间</span></div>
-            {offlineRequirements.map((requirement) => <button key={requirement.code} type="button" onClick={() => onOpenRequirement(requirement.code)}>
-              <span><small>{requirement.code}</small><b title={requirement.title}>{requirement.title}</b></span>
-              <span title={requirement.projectName}>{requirement.projectName}</span>
-              <time>{requirement.createdAt ?? "--"}</time>
-            </button>)}
-          </div> : <p className="my-requirements-empty">暂无未上线需求。</p>}
+          {offlineRequirements.length ? offlineRequirementGroups.map((group) => <article className="my-requirements-project-group" key={group.key}>
+            <header>
+              <div><Icon name="folder" /><b title={group.label}>{group.label}</b></div>
+              <small>{group.items.length} 个需求</small>
+            </header>
+            <div className="my-requirements-list">
+              <div className="my-requirements-head"><span>需求名称</span><span>创建时间</span></div>
+              {group.items.map((requirement) => <button key={requirement.code} type="button" onClick={() => onOpenRequirement(requirement.code)}>
+                <span><small>{requirement.code}</small><b title={requirement.title}>{requirement.title}</b></span>
+                <time>{requirement.createdAt ?? "--"}</time>
+              </button>)}
+            </div>
+          </article>) : <p className="my-requirements-empty">暂无未上线需求。</p>}
         </section>
         <MyRequirementTimeline title="已排期" status="scheduled" requirements={scheduledRequirements} onOpenRequirement={onOpenRequirement} />
         <MyRequirementTimeline title="已上线" status="online" requirements={onlineRequirements} onOpenRequirement={onOpenRequirement} />
@@ -1657,6 +1693,9 @@ export function RequirementWorkspace({
           ? {
               ...item,
               status: updated.status,
+              scheduleVersion: updated.scheduleVersion,
+              scheduledGrayDate: updated.scheduledGrayDate,
+              scheduledFullDate: updated.scheduledFullDate,
               releaseVersion: updated.releaseVersion,
               releaseDate: updated.releaseDate,
               updatedAt: updated.updatedAt,
@@ -1730,25 +1769,35 @@ export function RequirementWorkspace({
   }
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || view === "detail") return;
     let cancelled = false;
     const endpoint = showArchived
       ? "/api/v1/projects?include_archived=true"
       : "/api/v1/projects";
-    void request<Project[]>(endpoint)
-      .then((nextProjects) => {
-        if (!cancelled) setProjects(nextProjects);
-      })
-      .catch((reason) => {
-        if (!cancelled)
-          setError(
-            reason instanceof Error ? reason.message : "无法刷新项目目录。",
-          );
-      });
+    const refresh = () => {
+      void request<Project[]>(endpoint)
+        .then((nextProjects) => {
+          if (!cancelled) setProjects(nextProjects);
+        })
+        .catch((reason) => {
+          if (!cancelled)
+            setError(
+              reason instanceof Error ? reason.message : "无法刷新项目目录。",
+            );
+        });
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [loading, showArchived]);
+  }, [loading, showArchived, view]);
 
   if (loading)
     return (

@@ -403,16 +403,9 @@ async function ensureStore(): Promise<RequirementStore> {
   if (!Array.isArray(store.productSpecSnapshots)) { store.productSpecSnapshots = []; migrated = true; }
   if (!Array.isArray(store.globalSpecSnapshots)) { store.globalSpecSnapshots = []; migrated = true; }
   if (!Array.isArray(store.productSpecPendingExtractions)) { store.productSpecPendingExtractions = []; migrated = true; }
-  for (const requirement of store.requirements) {
-    const project = store.projects.find((item) => item.id === requirement.projectId);
-    if (!project) continue;
-    const status = releaseStatusOf(requirement);
-    if (status === "offline" || store.timelineEvents.some((event) => event.requirementCode === requirement.code && event.status === status)) continue;
-    const event = timelineEventFor(requirement, project, "backfill");
-    if (!event) continue;
-    store.timelineEvents.push(event);
-    migrated = true;
-  }
+  const previousTimeline = JSON.stringify(store.timelineEvents);
+  store.timelineEvents = normalizeCurrentTimelineEvents(store);
+  if (JSON.stringify(store.timelineEvents) !== previousTimeline) migrated = true;
   if (migrated) await writeStore(store);
   return store;
 }
@@ -450,6 +443,9 @@ function projectWithRequirementSummaries(store: RequirementStore, project: Proje
       owner: requirement.owner ?? summary.owner ?? currentVersion?.publisher,
       ownerId: requirement.ownerId ?? summary.ownerId,
       status: releaseStatusOf(requirement),
+      scheduleVersion: requirement.scheduleVersion,
+      scheduledGrayDate: requirement.scheduledGrayDate,
+      scheduledFullDate: requirement.scheduledFullDate,
       releaseVersion: requirement.releaseVersion,
       releaseDate: requirement.releaseDate,
       archivedAt: requirement.archivedAt,
@@ -1018,20 +1014,49 @@ function timelineEventFor(requirement: Requirement, project: Project, source: Re
   return null;
 }
 
+/**
+ * The board is a current-state view, rather than an audit log. Keep one
+ * timeline item per requirement and remove items for statuses that are no
+ * longer current. This also repairs stores created before status transitions
+ * replaced old timeline entries.
+ */
+function normalizeCurrentTimelineEvents(store: RequirementStore): RequirementTimelineEvent[] {
+  const existingEvents = store.timelineEvents ?? [];
+  const normalized: RequirementTimelineEvent[] = [];
+  for (const requirement of store.requirements) {
+    const project = store.projects.find((item) => item.id === requirement.projectId);
+    if (!project || archived(requirement) || archived(project)) continue;
+    const status = releaseStatusOf(requirement);
+    if (status === "offline") continue;
+    const existing = existingEvents
+      .filter((event) => event.requirementCode === requirement.code && event.status === status)
+      .toSorted((left, right) => right.recordedAt.localeCompare(left.recordedAt))[0];
+    const next = timelineEventFor(requirement, project, existing?.source ?? "backfill");
+    if (!next) continue;
+    normalized.push({
+      ...next,
+      id: existing?.id ?? next.id,
+      recordedAt: existing?.recordedAt ?? requirement.updatedAt ?? next.recordedAt,
+      source: existing?.source ?? "backfill",
+    });
+  }
+  return normalized;
+}
+
 function upsertCurrentTimelineEvent(store: RequirementStore, requirement: Requirement, project: Project, previousStatus: RequirementReleaseStatus) {
   const next = timelineEventFor(requirement, project, "status_update");
-  if (!next) return;
   const events = store.timelineEvents ?? (store.timelineEvents = []);
+  // A requirement can only occupy one current release state on the board.
+  // Remove the previous state before writing the new one, including when it
+  // is moved back to 未上线 and therefore has no timeline item.
+  store.timelineEvents = events.filter((event) => event.requirementCode !== requirement.code);
+  if (!next) return;
   const currentStatus = next.status;
   const existing = previousStatus === currentStatus
     ? events.filter((event) => event.requirementCode === requirement.code && event.status === currentStatus)
       .toSorted((left, right) => right.recordedAt.localeCompare(left.recordedAt))[0]
     : undefined;
-  if (existing) {
-    Object.assign(existing, { ...next, id: existing.id, source: existing.source });
-  } else {
-    events.push(next);
-  }
+  store.timelineEvents.push(existing ? { ...next, id: existing.id, source: existing.source } : next);
 }
 
 export async function updateRequirementReleaseStatus(requirementCode: string, input: UpdateRequirementReleaseStatusInput) {
