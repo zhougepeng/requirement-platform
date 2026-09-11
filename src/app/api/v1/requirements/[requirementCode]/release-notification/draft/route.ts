@@ -1,6 +1,7 @@
 import { apiError, apiJson } from "@/lib/api-response";
 import { publisherFromRequest } from "@/services/auth/request-actor";
 import { getRequirementDetail } from "@/services/requirement/repository";
+import { requestOrigin } from "@/services/requirement/public-share";
 import { buildReleaseNotificationDraft } from "@/services/notifications/release-notification-draft";
 
 export const runtime = "nodejs";
@@ -20,7 +21,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ req
     if (kind === "scheduled" && (!scheduleVersion || !scheduledGrayDate || !scheduledFullDate)) throw new Error("请填写排期版本、预计灰度时间和预计全量时间。");
     const detail = await getRequirementDetail(requirementCode);
     if (!detail) throw new Error("需求不存在。");
-    return apiJson(await buildReleaseNotificationDraft(requirementCode, detail.currentVersion.number, { kind, releaseVersion, releaseDate, scheduleVersion, scheduledGrayDate, scheduledFullDate }));
+    const longTermUrl = `${requestOrigin(request)}/r/${encodeURIComponent(requirementCode)}?${new URLSearchParams({ v: String(detail.currentVersion.number), returnTo: "/?view=assigned" }).toString()}`;
+    return apiJson(await buildReleaseNotificationDraft(requirementCode, detail.currentVersion.number, { kind, releaseVersion, releaseDate, scheduleVersion, scheduledGrayDate, scheduledFullDate, longTermUrl }));
   } catch (error) {
     return apiError(error);
   }

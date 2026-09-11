@@ -40,6 +40,16 @@ function readableCatalogFailure(error: unknown) {
   return error instanceof Error ? error.message : "飞书数据读取失败。";
 }
 
+function readableNotificationFailure(error: unknown) {
+  if (error instanceof FeishuLoginError && error.kind === "configuration")
+    return "飞书消息服务尚未配置：请在运行服务的 .env.local 中填写 FEISHU_APP_ID 和 FEISHU_APP_SECRET 后重启服务。";
+  if (error instanceof FeishuLoginError && error.kind === "unauthorized_tenant")
+    return "飞书应用不属于当前企业，无法发送消息。";
+  if (error instanceof FeishuLoginError && error.kind === "remote")
+    return "飞书消息服务暂不可用，请检查应用权限、网络和租户配置后重试。";
+  return error instanceof Error ? error.message : "飞书通知发送失败。";
+}
+
 async function sendText(token: string, receiveIdType: "open_id" | "chat_id", receiveId: string, content: string) {
   let response: Response;
   try {
@@ -147,25 +157,30 @@ export class FeishuNotificationService {
   }
 
   async send(targets: NotificationTarget[], content: string) {
-    const cleaned = content.trim();
-    if (!cleaned) throw new FeishuNotificationError("通知内容不能为空。", 400);
-    if (!targets.length) throw new FeishuNotificationError("请至少选择一个通知对象。", 400);
-    const recipientOpenIds = new Set<string>();
-    const chats = new Set<string>();
-    for (const target of targets) {
-      if (target.kind === "user") recipientOpenIds.add(target.id);
-      if (target.kind === "chat") chats.add(target.id);
-      if (target.kind === "department") {
-        for (const openId of await listFeishuDepartmentMemberOpenIds(target.id, target.departmentIdType ?? "department_id")) recipientOpenIds.add(openId);
+    try {
+      const cleaned = content.trim();
+      if (!cleaned) throw new FeishuNotificationError("通知内容不能为空。", 400);
+      if (!targets.length) throw new FeishuNotificationError("请至少选择一个通知对象。", 400);
+      const recipientOpenIds = new Set<string>();
+      const chats = new Set<string>();
+      for (const target of targets) {
+        if (target.kind === "user") recipientOpenIds.add(target.id);
+        if (target.kind === "chat") chats.add(target.id);
+        if (target.kind === "department") {
+          for (const openId of await listFeishuDepartmentMemberOpenIds(target.id, target.departmentIdType ?? "department_id")) recipientOpenIds.add(openId);
+        }
+        if (target.kind === "all") {
+          const snapshot = await fetchFeishuEmployees();
+          for (const employee of snapshot.employees) if (employee.directoryActive) recipientOpenIds.add(employee.openId);
+        }
       }
-      if (target.kind === "all") {
-        const snapshot = await fetchFeishuEmployees();
-        for (const employee of snapshot.employees) if (employee.directoryActive) recipientOpenIds.add(employee.openId);
-      }
+      let deliveredCount = await this.sendToUsers([...recipientOpenIds], cleaned);
+      for (const chatId of chats) deliveredCount += await this.sendToChat(chatId, cleaned);
+      return { deliveredCount };
+    } catch (error) {
+      if (error instanceof FeishuNotificationError) throw error;
+      throw new FeishuNotificationError(readableNotificationFailure(error), error instanceof FeishuLoginError ? 503 : 502);
     }
-    let deliveredCount = await this.sendToUsers([...recipientOpenIds], cleaned);
-    for (const chatId of chats) deliveredCount += await this.sendToChat(chatId, cleaned);
-    return { deliveredCount };
   }
 }
 

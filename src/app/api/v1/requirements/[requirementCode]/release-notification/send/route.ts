@@ -18,6 +18,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ req
     if (!Array.isArray(body.targets) || typeof body.content !== "string") throw new Error("通知参数无效。");
     const detail = await getRequirementDetail(requirementCode);
     if (!detail) throw new Error("需求不存在。");
+    if (detail.requirement.status !== "scheduled") throw new Error("只有已排期需求支持发送排期通知，上线需求不会发送此通知。");
     const targets = body.targets as NotificationTarget[];
     const result = await feishuNotificationService.send(targets, body.content);
     await saveReleaseNotificationPreference(actor.id, detail.project.id, { enabled: true, targets });

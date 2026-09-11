@@ -19,12 +19,20 @@ type NotificationDraftInput = {
   scheduleVersion?: string;
   scheduledGrayDate?: string;
   scheduledFullDate?: string;
+  longTermUrl?: string;
 };
 
 function fallback(context: Awaited<ReturnType<typeof getTestCaseGenerationContext>>, input: NotificationDraftInput) {
   const scheduled = input.kind === "scheduled";
+  if (scheduled) {
+    return [
+      `【需求排期】${context.requirementTitle}`,
+      `排期版本：${input.scheduleVersion}`,
+      `查看需求：${input.longTermUrl ?? ""}`,
+    ].join("\n");
+  }
   return [
-    `${scheduled ? "📅 需求已排期" : "🚀 新功能上线"}｜${context.requirementTitle}`,
+    `🚀 新功能上线｜${context.requirementTitle}`,
     "",
     scheduled ? `排期版本：${input.scheduleVersion}` : `版本：${input.releaseVersion}`,
     scheduled ? `预计灰度时间：${input.scheduledGrayDate}` : `上线时间：${input.releaseDate}`,
@@ -40,9 +48,10 @@ function fallback(context: Awaited<ReturnType<typeof getTestCaseGenerationContex
 
 export async function buildReleaseNotificationDraft(requirementCode: string, versionNo: number, input: NotificationDraftInput) {
   const context = await getTestCaseGenerationContext(requirementCode, versionNo);
-  const testCases = await listVersionTestCases(requirementCode, versionNo);
   const defaultContent = fallback(context, input);
   const scheduled = input.kind === "scheduled";
+  if (scheduled) return { content: defaultContent };
+  const testCases = await listVersionTestCases(requirementCode, versionNo);
   try {
     const { baseUrl, apiKey, model, reasoningEffort } = await resolveAssistantModel();
     const response = await fetch(`${baseUrl}/chat/completions`, {
