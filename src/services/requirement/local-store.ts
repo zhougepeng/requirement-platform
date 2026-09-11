@@ -6,6 +6,7 @@ import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
 import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecEntry, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementAuditAction, RequirementAuditLog, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementRuntime, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
+import { normalizeWorkbuddyUrl } from "@/lib/workbuddy-url";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -86,6 +87,10 @@ export type UpdateProjectInput = {
   name: string;
   description: string;
   owner?: string;
+};
+
+export type UpdateProjectWorkbuddyInput = {
+  url: string;
 };
 
 export type RequirementReleaseStatus = "offline" | "scheduled" | "online";
@@ -587,6 +592,17 @@ export async function updateProject(projectId: string, input: UpdateProjectInput
     project.name = name;
     project.description = description;
     project.owner = owner;
+    project.updatedAt = now();
+    return clone(project);
+  });
+}
+
+export async function updateProjectWorkbuddyUrl(projectId: string, input: UpdateProjectWorkbuddyInput) {
+  const url = input.url.trim() ? normalizeWorkbuddyUrl(input.url) : undefined;
+  return mutate((store) => {
+    const project = store.projects.find((item) => item.id === projectId);
+    if (!project) throw new Error("项目不存在。");
+    project.workbuddyUrl = url;
     project.updatedAt = now();
     return clone(project);
   });

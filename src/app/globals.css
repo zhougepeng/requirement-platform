@@ -288,7 +288,7 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 
 /* Directory is intentionally project-only; requirements are shown in the main table. */
 .project-context-menu-dismiss { position:fixed; z-index:20; inset:0; border:0; padding:0; background:transparent; cursor:default; }
-.project-context-menu { position:fixed; z-index:21; display:grid; min-width:168px; overflow:hidden; border:1px solid #d9e2ec; border-radius:7px; padding:4px; background:#fff; box-shadow:0 10px 24px rgba(16,24,40,.16); }
+.project-context-menu { position:fixed; z-index:21; display:grid; min-width:190px; overflow:hidden; border:1px solid #d9e2ec; border-radius:7px; padding:4px; background:#fff; box-shadow:0 10px 24px rgba(16,24,40,.16); }
 .project-context-menu button { display:flex; align-items:center; gap:8px; min-height:34px; border:0; border-radius:4px; padding:0 10px; color:#475467; background:#fff; text-align:left; font-size:12px; white-space:nowrap; }
 .project-context-menu button:hover { color:#175cd3; background:#eef5ff; }
 .project-context-menu button.is-danger { color:#b42318; }
@@ -308,8 +308,7 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 .my-requirements-section>header>div { display:flex; align-items:center; gap:7px; color:#475467; }.my-requirements-section>header svg { width:15px; color:#2b72ed; }.my-requirements-section>header b { color:#344054; font-size:13px; font-weight:620; }.my-requirements-section>header small { display:grid; min-width:18px; height:18px; place-items:center; border-radius:9px; padding:0 4px; color:#175cd3; background:#eef5ff; font-size:10px; }.my-requirements-section>header>span { color:#98a2b3; font-size:11px; }
 .my-requirements-list { overflow:hidden; border:1px solid #e3e8ef; border-radius:6px; background:#fff; box-shadow:0 1px 2px rgba(16,24,40,.025); }
 .my-requirements-section .my-requirements-list { border:0; border-radius:0; box-shadow:none; }
-.my-requirements-head,.my-requirements-list>button { display:grid; grid-template-columns:minmax(260px,1.5fr) minmax(150px,.7fr); align-items:center; gap:12px; }
-.my-requirements-head { min-height:34px; border-bottom:1px solid #e4e7ec; padding:0 12px; color:#98a2b3; background:#fafbfc; font-size:11px; }
+.my-requirements-list>button { display:grid; grid-template-columns:minmax(260px,1.5fr) minmax(150px,.7fr); align-items:center; gap:12px; }
 .my-requirements-list>button { width:100%; min-height:58px; border:0; border-bottom:1px solid #edf0f3; padding:8px 12px; color:#475467; background:#fff; text-align:left; }
 .my-requirements-list>button:last-child { border-bottom:0; }
 .my-requirements-list>button:hover { background:#fbfdff; }
@@ -319,6 +318,7 @@ button,input,select { font:inherit; } button { cursor:pointer; } button:focus-vi
 .my-requirements-list small { color:#98a2b3; font-size:10px; }
 .my-requirements-list b { overflow:hidden; color:#344054; font-size:13px; font-weight:620; text-overflow:ellipsis; white-space:nowrap; }
 .my-requirements-list time { color:#667085; font-size:12px; }
+.my-requirements-offline-group>aside b { font-size:14px; font-weight:600; }
 .my-requirement-status { width:max-content; border-radius:4px; padding:3px 6px; font-size:11px; font-style:normal; font-weight:600; white-space:nowrap; }
 .my-requirement-status.is-offline { color:#b54708; background:#fffaeb; }.my-requirement-status.is-scheduled { color:#b54708; background:#fff5df; }.my-requirement-status.is-online { color:#067647; background:#ecfdf3; }
 .my-requirements-empty { margin:0; border:1px solid #e3e8ef; border-radius:6px; padding:48px 18px; color:#98a2b3; background:#fff; font-size:12px; text-align:center; }

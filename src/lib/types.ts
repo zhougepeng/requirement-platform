@@ -178,6 +178,8 @@ export type Project = {
   owner?: string;
   /** Feishu open_id for ownership checks. Legacy records may not have it. */
   ownerId?: string;
+  /** Project-scoped Workbuddy entry URL; user SSO credentials are never stored here. */
+  workbuddyUrl?: string;
   archivedAt?: string;
   archivedBy?: string;
   requirements: RequirementSummary[];
