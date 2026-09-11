@@ -349,6 +349,35 @@ export type RequirementTimelineEvent = {
   source: "backfill" | "status_update";
 };
 
+export type RequirementAuditAction =
+  | "view_requirement"
+  | "update_release_status"
+  | "archive_requirement"
+  | "restore_requirement"
+  | "publish_requirement"
+  | "publish_version"
+  | "create_comment"
+  | "update_comment"
+  | "delete_comment"
+  | "create_discussion"
+  | "update_discussion"
+  | "delete_discussion"
+  | "process_discussion";
+
+export type RequirementAuditLog = {
+  id: string;
+  requirementCode: string;
+  requirementTitle: string;
+  projectId: string;
+  projectName: string;
+  actorId: string;
+  actorName: string;
+  action: RequirementAuditAction;
+  actionLabel: string;
+  detail?: string;
+  createdAt: string;
+};
+
 export type DemoArtifact = {
   id: string;
   originalFileName: string;
@@ -378,6 +407,8 @@ export type RequirementStore = {
   productSpecSnapshots?: ProductSpecSnapshot[];
   globalSpecSnapshots?: ProductSpecSnapshot[];
   productSpecPendingExtractions?: ProductSpecPendingExtraction[];
+  /** Optional for backward compatibility with stores created before audit logs. */
+  auditLogs?: RequirementAuditLog[];
 };
 
 export type RequirementDetail = {

@@ -1,6 +1,6 @@
 import { apiError, apiJson } from "@/lib/api-response";
 import { publisherFromRequest } from "@/services/auth/request-actor";
-import { getRequirementDetail, updateRequirementReleaseStatus } from "@/services/requirement/repository";
+import { getRequirementDetail, recordRequirementAudit, updateRequirementReleaseStatus } from "@/services/requirement/repository";
 import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 import { scheduleRequirementKnowledgeExtraction } from "@/services/materials/requirement-knowledge-extraction-service";
 import { detachGeneratedMaterialSource } from "@/services/materials/material-service";
@@ -27,6 +27,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ re
       assignedDeveloperIds: Array.isArray(body.assignedDeveloperIds) ? body.assignedDeveloperIds.filter((item): item is string => typeof item === "string") : undefined,
       assignedTesterIds: Array.isArray(body.assignedTesterIds) ? body.assignedTesterIds.filter((item): item is string => typeof item === "string") : undefined,
     });
+    await recordRequirementAudit({ requirementCode, action: "update_release_status", actor, detail: `状态：${status}` });
     scheduleRequirementKnowledgeSync(requirementCode);
     if (updated.status === "online" && before.requirement.status !== "online") {
       scheduleRequirementKnowledgeExtraction(requirementCode);

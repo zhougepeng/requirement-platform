@@ -1,5 +1,5 @@
 import { apiError, apiJson } from "@/lib/api-response";
-import { getRequirementDetail, listVersionSummaries, listVersions, publishRequirementSnapshot } from "@/services/requirement/repository";
+import { getRequirementDetail, listVersionSummaries, listVersions, publishRequirementSnapshot, recordRequirementAudit } from "@/services/requirement/repository";
 import { actorFromRequest, isAdministratorActor, publisherFromRequest } from "@/services/auth/request-actor";
 import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 
@@ -30,6 +30,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ req
     if (!(archive instanceof File)) throw new Error("请以 archive 字段上传需求资产 ZIP。");
     if (typeof changeSummary !== "string") throw new Error("change_summary 必填。");
     const published = await publishRequirementSnapshot({ requirementCode, archive, changeSummary, versionName: typeof formData.get("version_name") === "string" ? String(formData.get("version_name")) : undefined, setCurrent: formData.get("set_current") !== "false", actor });
+    await recordRequirementAudit({ requirementCode, action: "publish_version", actor, detail: changeSummary });
     scheduleRequirementKnowledgeSync(requirementCode);
     return apiJson(published, { status: 201 });
   } catch (error) {

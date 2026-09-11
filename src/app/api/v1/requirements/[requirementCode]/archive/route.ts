@@ -1,6 +1,6 @@
 import { apiError, apiJson } from "@/lib/api-response";
 import { publisherFromRequest } from "@/services/auth/request-actor";
-import { archiveRequirement } from "@/services/requirement/repository";
+import { archiveRequirement, recordRequirementAudit } from "@/services/requirement/repository";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,7 +9,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ req
   try {
     const actor = await publisherFromRequest(request);
     const { requirementCode } = await params;
-    return apiJson(await archiveRequirement(requirementCode, actor));
+    const archived = await archiveRequirement(requirementCode, actor);
+    await recordRequirementAudit({ requirementCode, action: "archive_requirement", actor });
+    return apiJson(archived);
   } catch (error) {
     return apiError(error);
   }

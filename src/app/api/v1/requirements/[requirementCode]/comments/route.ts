@@ -1,5 +1,5 @@
 import { apiError, apiJson } from "@/lib/api-response";
-import { addHtmlComment, addPrdComment, listHtmlComments, listPrdComments, replyHtmlComment, replyPrdComment } from "@/services/requirement/repository";
+import { addHtmlComment, addPrdComment, listHtmlComments, listPrdComments, recordRequirementAudit, replyHtmlComment, replyPrdComment } from "@/services/requirement/repository";
 import { actorFromRequest } from "@/services/auth/request-actor";
 import type { HtmlCommentAnchor, PrdCommentAnchor } from "@/lib/types";
 
@@ -30,10 +30,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ req
     if (typeof body.version_id !== "string" || typeof body.document_id !== "string" || typeof body.content !== "string") throw new Error("version_id、document_id 和 content 必填。");
     const actor = await actorFromRequest(request);
     const kind = body.kind === "html" ? "html" : "prd";
-    if (typeof body.parent_id === "string") return apiJson(kind === "html" ? await replyHtmlComment(requirementCode, body.version_id, body.document_id, body.parent_id, body.content, actor) : await replyPrdComment(requirementCode, body.version_id, body.document_id, body.parent_id, body.content, actor), { status: 201 });
+    if (typeof body.parent_id === "string") {
+      const result = kind === "html" ? await replyHtmlComment(requirementCode, body.version_id, body.document_id, body.parent_id, body.content, actor) : await replyPrdComment(requirementCode, body.version_id, body.document_id, body.parent_id, body.content, actor);
+      await recordRequirementAudit({ requirementCode, action: "create_comment", actor, detail: "回复评论" });
+      return apiJson(result, { status: 201 });
+    }
     if (!body.anchor || typeof body.anchor !== "object") throw new Error("新建评论必须关联原文或页面区域。");
-    if (kind === "html") return apiJson(await addHtmlComment(requirementCode, body.version_id, body.content, body.anchor as HtmlCommentAnchor, actor), { status: 201 });
-    return apiJson(await addPrdComment(requirementCode, body.version_id, body.content, body.anchor as PrdCommentAnchor, actor), { status: 201 });
+    const result = kind === "html" ? await addHtmlComment(requirementCode, body.version_id, body.content, body.anchor as HtmlCommentAnchor, actor) : await addPrdComment(requirementCode, body.version_id, body.content, body.anchor as PrdCommentAnchor, actor);
+    await recordRequirementAudit({ requirementCode, action: "create_comment", actor, detail: kind === "html" ? "Demo 评论" : "PRD 评论" });
+    return apiJson(result, { status: 201 });
   } catch (error) {
     return apiError(error);
   }

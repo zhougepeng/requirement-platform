@@ -1,5 +1,5 @@
 import { apiError, apiJson } from "@/lib/api-response";
-import { deleteRequirementDiscussion, processRequirementDiscussion, updateRequirementDiscussion } from "@/services/requirement/repository";
+import { deleteRequirementDiscussion, processRequirementDiscussion, recordRequirementAudit, updateRequirementDiscussion } from "@/services/requirement/repository";
 import { actorFromRequest, publisherFromRequest } from "@/services/auth/request-actor";
 
 export const runtime = "nodejs";
@@ -13,19 +13,25 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ re
       try { await publisherFromRequest(request); canManage = true; } catch { /* owner permission is checked by the store. */ }
       if (body.resolution !== "resolved" && body.resolution !== "rejected" && body.resolution !== "related_requirement") throw new Error("处理方式无效。");
       if (typeof body.note !== "string") throw new Error("处理说明必填。");
-      return apiJson(await processRequirementDiscussion(requirementCode, discussionId, { resolution: body.resolution, note: body.note, relatedRequirementCode: typeof body.related_requirement_code === "string" ? body.related_requirement_code : undefined }, actor, canManage));
+      const processed = await processRequirementDiscussion(requirementCode, discussionId, { resolution: body.resolution, note: body.note, relatedRequirementCode: typeof body.related_requirement_code === "string" ? body.related_requirement_code : undefined }, actor, canManage);
+      await recordRequirementAudit({ requirementCode, action: "process_discussion", actor, detail: "处理讨论" });
+      return apiJson(processed);
     }
     if (typeof body.content !== "string") throw new Error("讨论内容必填。");
-    return apiJson(await updateRequirementDiscussion(discussionId, body.content, actor));
+    const updated = await updateRequirementDiscussion(discussionId, body.content, actor);
+    await recordRequirementAudit({ requirementCode, action: "update_discussion", actor });
+    return apiJson(updated);
   } catch (error) {
     return apiError(error);
   }
 }
 
-export async function DELETE(request: Request, { params }: { params: Promise<{ discussionId: string }> }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ requirementCode: string; discussionId: string }> }) {
   try {
-    const [{ discussionId }, actor] = await Promise.all([params, actorFromRequest(request)]);
-    return apiJson(await deleteRequirementDiscussion(discussionId, actor));
+    const [{ requirementCode, discussionId }, actor] = await Promise.all([params, actorFromRequest(request)]);
+    const deleted = await deleteRequirementDiscussion(discussionId, actor);
+    await recordRequirementAudit({ requirementCode, action: "delete_discussion", actor });
+    return apiJson(deleted);
   } catch (error) {
     return apiError(error);
   }

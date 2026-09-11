@@ -13,6 +13,8 @@ export type RequirementTimelineView = localStore.RequirementTimelineView;
 export type RequirementTimelinePage = localStore.RequirementTimelinePage;
 export type CurrentRequirementKnowledgeSource = localStore.CurrentRequirementKnowledgeSource;
 export type UpdateRequirementReleaseStatusInput = localStore.UpdateRequirementReleaseStatusInput;
+export type RequirementAuditFilters = localStore.RequirementAuditFilters;
+export type RequirementAuditInput = localStore.RequirementAuditInput;
 export type RequirementTestCase = import("@/lib/types").RequirementTestCase;
 export type CreateProductInput = localStore.CreateProductInput;
 
@@ -27,6 +29,8 @@ export const getRequirementDetailSummary = localStore.getRequirementDetailSummar
 export const listProjectRequirements = localStore.listProjectRequirements;
 export const archiveRequirement = localStore.archiveRequirement;
 export const restoreRequirement = localStore.restoreRequirement;
+export const listRequirementAuditLogs = localStore.listRequirementAuditLogs;
+export const recordRequirementAudit = localStore.recordRequirementAudit;
 export const updateRequirementReleaseStatus = localStore.updateRequirementReleaseStatus;
 export const listRequirementTimeline = localStore.listRequirementTimeline;
 export const listVersions = localStore.listVersions;

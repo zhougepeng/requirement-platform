@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecEntry, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementRuntime, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
+import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecEntry, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementAuditAction, RequirementAuditLog, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementRuntime, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -23,6 +23,29 @@ const ASSET_OBJECT_DIR = path.join(DATA_DIR, "asset-objects");
 const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
 const MAX_SNAPSHOT_FILES = 500;
 const SNAPSHOT_PATCH_ENTRY = "__requirement-platform-patch__.json";
+
+export const REQUIREMENT_AUDIT_ACTION_LABELS: Record<RequirementAuditAction, string> = {
+  view_requirement: "查看需求",
+  update_release_status: "更新上线状态",
+  archive_requirement: "作废需求",
+  restore_requirement: "恢复需求",
+  publish_requirement: "发布需求",
+  publish_version: "发布新版本",
+  create_comment: "发表评论",
+  update_comment: "编辑评论",
+  delete_comment: "删除评论",
+  create_discussion: "发起讨论",
+  update_discussion: "编辑讨论",
+  delete_discussion: "删除讨论",
+  process_discussion: "处理讨论",
+};
+
+export type RequirementAuditInput = {
+  requirementCode: string;
+  action: RequirementAuditAction;
+  actor?: { id: string; name: string };
+  detail?: string;
+};
 
 export function publishedDemoDirectory(projectCode: string, requirementCode: string, versionNo: number) {
   safeSegment(projectCode, "项目编码");
@@ -405,6 +428,7 @@ async function ensureStore(): Promise<RequirementStore> {
   if (!Array.isArray(store.productSpecSnapshots)) { store.productSpecSnapshots = []; migrated = true; }
   if (!Array.isArray(store.globalSpecSnapshots)) { store.globalSpecSnapshots = []; migrated = true; }
   if (!Array.isArray(store.productSpecPendingExtractions)) { store.productSpecPendingExtractions = []; migrated = true; }
+  if (!Array.isArray(store.auditLogs)) { store.auditLogs = []; migrated = true; }
   const previousTimeline = JSON.stringify(store.timelineEvents);
   store.timelineEvents = normalizeCurrentTimelineEvents(store);
   if (JSON.stringify(store.timelineEvents) !== previousTimeline) migrated = true;
@@ -427,6 +451,67 @@ async function mutate<T>(operation: (store: RequirementStore) => Promise<T> | T)
   } finally {
     release();
   }
+}
+
+function auditActor(actor?: { id: string; name: string }) {
+  return {
+    id: actor?.id || "local-dev-user",
+    name: actor?.name || process.env.LOCAL_USER_NAME?.trim() || "本地开发身份",
+  };
+}
+
+function appendAuditLog(store: RequirementStore, input: RequirementAuditInput) {
+  const requirement = store.requirements.find((item) => item.code === input.requirementCode);
+  if (!requirement) throw new Error("需求不存在。");
+  const project = store.projects.find((item) => item.id === requirement.projectId);
+  if (!project) throw new Error("需求所属项目不存在。");
+  const actor = auditActor(input.actor);
+  const entry: RequirementAuditLog = {
+    id: `audit_${randomUUID().replaceAll("-", "")}`,
+    requirementCode: requirement.code,
+    requirementTitle: requirement.title,
+    projectId: project.id,
+    projectName: project.name,
+    actorId: actor.id,
+    actorName: actor.name,
+    action: input.action,
+    actionLabel: REQUIREMENT_AUDIT_ACTION_LABELS[input.action],
+    detail: input.detail,
+    createdAt: now(),
+  };
+  const logs = store.auditLogs ?? (store.auditLogs = []);
+  logs.push(entry);
+  if (logs.length > 5000) store.auditLogs = logs.slice(-5000);
+  return entry;
+}
+
+export async function recordRequirementAudit(input: RequirementAuditInput) {
+  return mutate((store) => clone(appendAuditLog(store, input)));
+}
+
+export type RequirementAuditFilters = {
+  requirementCode?: string;
+  actorName?: string;
+  action?: RequirementAuditAction;
+  from?: string;
+  to?: string;
+  limit?: number;
+};
+
+export async function listRequirementAuditLogs(filters: RequirementAuditFilters = {}) {
+  const store = await ensureStore();
+  const from = filters.from?.trim() ? `${filters.from.trim()} 00:00` : undefined;
+  const to = filters.to?.trim() ? `${filters.to.trim()} 23:59` : undefined;
+  const actorName = filters.actorName?.trim().toLowerCase();
+  const limit = Math.min(Math.max(filters.limit ?? 500, 1), 500);
+  return clone((store.auditLogs ?? [])
+    .filter((item) => !filters.requirementCode || item.requirementCode === filters.requirementCode)
+    .filter((item) => !actorName || item.actorName.toLowerCase().includes(actorName))
+    .filter((item) => !filters.action || item.action === filters.action)
+    .filter((item) => !from || item.createdAt >= from)
+    .filter((item) => !to || item.createdAt <= to)
+    .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, limit));
 }
 
 function archived(value: { archivedAt?: string }) {

@@ -24,6 +24,7 @@ import { TestCasesPanel } from "@/components/test-cases-panel";
 import { VersionDocumentDirectory } from "@/components/version-document-directory";
 import { ProductSpecDialog } from "@/components/product-spec-dialog";
 import { WaitingAuthorization } from "@/components/waiting-authorization";
+import { RequirementAuditLogDrawer, RequirementAuditLogPage } from "@/components/requirement-audit-log";
 import {
   RequirementReleaseStatus,
   type UpdateRequirementReleaseStatusInput,
@@ -45,7 +46,7 @@ import type {
 } from "@/lib/types";
 
 type Tab = "demo" | "prd" | "split" | "test-cases" | "versions";
-type View = "board" | "detail" | "projects" | "requirements" | "materials" | "my-requirements" | "assigned";
+type View = "board" | "detail" | "projects" | "requirements" | "materials" | "my-requirements" | "assigned" | "logs";
 export type WorkspaceView = Exclude<View, "detail">;
 type ApiResponse<T> =
   { data: T; error?: never } | { data?: never; error: string };
@@ -1093,6 +1094,7 @@ export function RequirementWorkspace({
   const [htmlCommentMode, setHtmlCommentMode] = useState(false);
   const [discussions, setDiscussions] = useState<RequirementDiscussion[]>([]);
   const [discussionsOpen, setDiscussionsOpen] = useState(false);
+  const [auditLogOpen, setAuditLogOpen] = useState(false);
   const [documentRefreshKey, setDocumentRefreshKey] = useState(0);
   const [refreshingRequirement, setRefreshingRequirement] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser>({
@@ -2140,6 +2142,15 @@ export function RequirementWorkspace({
                     >
                       <span>工作搭子设置</span>
                     </button>
+                    <button
+                      role="menuitem"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        setView("logs");
+                      }}
+                    >
+                      <span>系统日志</span>
+                    </button>
                     {currentUser.isAdmin ? (
                       <>
                         <span className="sidebar-action-divider" />
@@ -2218,6 +2229,8 @@ export function RequirementWorkspace({
           />
         ) : view === "materials" ? (
           <MaterialLibrary projects={projects} canEdit={currentUser.canPublish} />
+        ) : view === "logs" ? (
+          <RequirementAuditLogPage />
         ) : view === "projects" || (view === "requirements" && !activeProject) ? (
           <ProjectDirectory
             projects={projects}
@@ -2332,6 +2345,7 @@ export function RequirementWorkspace({
                   </button>
                 </div>
                 <div className="header-actions">
+                  <button className={`icon-button${auditLogOpen ? " is-active" : ""}`} onClick={() => setAuditLogOpen(true)} title="查看需求日志" aria-label="查看需求日志"><Icon name="messages" /></button>
                   <button className={`icon-button${discussionsOpen ? " is-active" : ""}`} onClick={() => setDiscussionsOpen((open) => !open)} title={`需求讨论${openDiscussionCount ? `（待处理 ${openDiscussionCount}）` : ""}`} aria-label="打开需求讨论"><Icon name="messages" />{openDiscussionCount ? <b className="prd-comment-count">{openDiscussionCount}</b> : null}</button>
                   {currentUser.canPublish ? <button className="icon-button product-spec-trigger" onClick={() => setProductSpecOpen(true)} title="提取产品规范" aria-label="提取产品规范"><Icon name="sparkles" /></button> : null}
                    {renderTab === "prd" || renderTab === "split" ? <button className={`icon-button${prdCommentMode ? " is-active" : ""}`} onClick={() => { const next = !prdCommentMode; setPrdCommentMode(next); if (next) showCommentModeNotice(); }} title={`PRD 评论${prdThreadCount ? `（${prdThreadCount}）` : ""}`} aria-label="进入 PRD 评论态"><Icon name="message" />{prdThreadCount ? <b className="prd-comment-count">{prdThreadCount}</b> : null}</button> : null}
@@ -2631,6 +2645,7 @@ export function RequirementWorkspace({
               onDelete={deleteRequirementDiscussion}
             /> : null}
             {detail && selectedVersion ? <ProductSpecDialog key={`${detail.requirement.code}-${productSpecOpen ? "open" : "closed"}`} open={productSpecOpen} requirementCode={detail.requirement.code} initialProductId={detail.requirement.productId} onClose={() => setProductSpecOpen(false)} onMerged={(productId) => setDetail((current) => current ? { ...current, requirement: { ...current.requirement, productId } } : current)} /> : null}
+            {detail ? <RequirementAuditLogDrawer open={auditLogOpen} requirementCode={detail.requirement.code} requirementTitle={detail.requirement.title} onClose={() => setAuditLogOpen(false)} /> : null}
           </>
         )}
       </main>
