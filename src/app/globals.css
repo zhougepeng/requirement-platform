@@ -661,6 +661,19 @@ html::-webkit-scrollbar-thumb:hover, body::-webkit-scrollbar-thumb:hover, .sideb
 .release-status-dialog-body label { display:grid; gap:7px; color:#344054; font-size:12px; font-weight:600; }
 .release-status-dialog-body input { width:100%; height:34px; border:1px solid #d0d5dd; border-radius:6px; padding:0 9px; color:#1d2939; background:#fff; font:13px/1 inherit; }
 .release-status-dialog-body input:focus { outline:0; border-color:#84adff; box-shadow:0 0 0 3px #eff4ff; }
+.release-version-picker { position:relative; min-width:0; }
+.release-version-input-wrap { display:flex; align-items:center; overflow:hidden; border:1px solid #d0d5dd; border-radius:6px; background:#fff; }
+.release-version-input-wrap:focus-within { border-color:#84adff; box-shadow:0 0 0 3px #eff4ff; }
+.release-version-input-wrap input { min-width:0; border:0; border-radius:0; box-shadow:none!important; }
+.release-version-input-wrap input:focus { border:0; box-shadow:none; }
+.release-version-toggle { display:grid; width:32px; height:32px; flex:0 0 auto; place-items:center; border:0; border-left:1px solid #eaecf0; color:#667085; background:#fff; font-size:15px; line-height:1; cursor:pointer; }
+.release-version-toggle:hover { color:#175cd3; background:#f8fafc; }
+.release-version-options { position:absolute; z-index:8; top:calc(100% + 5px); right:0; left:0; display:grid; max-height:220px; overflow:auto; border:1px solid #d0d5dd; border-radius:6px; background:#fff; box-shadow:0 10px 24px rgba(16,24,40,.14); }
+.release-version-options button { display:grid; gap:2px; min-height:42px; border:0; border-bottom:1px solid #f2f4f7; padding:7px 10px; color:#344054; background:#fff; text-align:left; cursor:pointer; }
+.release-version-options button:last-child { border-bottom:0; }
+.release-version-options button:hover { background:#f5f8ff; }
+.release-version-options b { font-size:12px; font-weight:650; }
+.release-version-options small { overflow:hidden; color:#98a2b3; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
 .release-assignee-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .release-assignee-field { min-width:0; margin:0; border:1px solid #e4e7ec; border-radius:6px; padding:9px; }
 .release-assignee-field legend { padding:0 4px; color:#344054; font-size:12px; font-weight:600; }

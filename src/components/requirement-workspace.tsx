@@ -1004,6 +1004,7 @@ function RequirementList({
                     requirement={item}
                     requirementCode={item.code}
                     projectId={project.id}
+                    versionHistory={requirements}
                     canEdit={
                       canManageRequirements &&
                       !project.archivedAt &&
@@ -2288,6 +2289,7 @@ export function RequirementWorkspace({
                     requirement={detail!.requirement}
                     requirementCode={detail!.requirement.code}
                     projectId={detail!.project.id}
+                    versionHistory={activeProject?.requirements ?? detail!.project.requirements}
                     canEdit={
                       currentUser.canPublish &&
                       !detail!.requirement.archivedAt &&
