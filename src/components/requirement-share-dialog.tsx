@@ -83,6 +83,7 @@ export function RequirementShareDialog({
       .filter((target) => !normalized || `${target.name} ${kindLabel(target)}`.toLocaleLowerCase().includes(normalized))
       .slice(0, 12);
   }, [options, query, targets]);
+  const uniqueWarnings = useMemo(() => [...new Set(warnings)], [warnings]);
 
   if (!open || typeof document === "undefined") return null;
   function add(target: NotificationTarget) {
@@ -122,10 +123,10 @@ export function RequirementShareDialog({
           <label className="release-notification-label">接收对象
             <div className="release-notification-chips">{targets.length ? targets.map((target) => <span className="release-notification-chip" key={keyOf(target)}><small>{kindLabel(target)}</small>{target.name}<button type="button" onClick={() => remove(target)} aria-label={`移除 ${target.name}`}>×</button></span>) : <span className="release-notification-empty">尚未选择接收对象</span>}</div>
           </label>
-          <label className="release-notification-target-search"><Icon name="search" /><input value={query} disabled={loading || sending} onChange={(event) => setQuery(event.target.value)} placeholder="输入姓名、群聊、部门或全员" autoFocus /><span aria-hidden="true"><Icon name="plus" /></span></label>
+          <label className="release-notification-target-search"><Icon name="search" /><input name="share-target-query" autoComplete="off" value={query} disabled={loading || sending} onChange={(event) => setQuery(event.target.value)} placeholder="输入姓名、群聊、部门或全员…" autoFocus /><span aria-hidden="true"><Icon name="plus" /></span></label>
           <div className="release-notification-target-results requirement-share-results">{loading ? <p>正在读取可选对象…</p> : candidates.length ? candidates.map((target) => <button type="button" key={keyOf(target)} onClick={() => add(target)} disabled={sending}><span><b>{target.name}</b><small>{kindLabel(target)}</small></span><Icon name="plus" /></button>) : <p>{query.trim() ? "没有匹配的接收对象" : "暂无可选对象"}</p>}</div>
-          {warnings.map((warning) => <p className="release-notification-help is-warning" key={warning}>{warning}</p>)}
-          {error ? <p className="release-status-error">{error}</p> : null}
+          {uniqueWarnings.map((warning) => <p className="release-notification-help is-warning" key={warning}>{warning}</p>)}
+          {error ? <p className="release-status-error" role="alert" aria-live="polite">{error}</p> : null}
         </div>
         <footer><button type="button" className="release-status-cancel" disabled={sending} onClick={onClose}>取消</button><button type="button" className="release-status-confirm" disabled={sending || !targets.length} onClick={() => void send()}>{sending ? "发送中…" : "发送分享"}</button></footer>
       </section>

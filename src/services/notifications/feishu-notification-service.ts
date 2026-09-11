@@ -176,6 +176,9 @@ export class FeishuNotificationService {
       }
       let deliveredCount = await this.sendToUsers([...recipientOpenIds], cleaned);
       for (const chatId of chats) deliveredCount += await this.sendToChat(chatId, cleaned);
+      if (deliveredCount === 0) {
+        throw new FeishuNotificationError("没有找到可发送的飞书接收对象，请重新选择人员或同步飞书组织架构。", 400);
+      }
       return { deliveredCount };
     } catch (error) {
       if (error instanceof FeishuNotificationError) throw error;

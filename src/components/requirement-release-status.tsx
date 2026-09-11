@@ -270,8 +270,9 @@ export function RequirementReleaseStatus({ requirement, requirementCode, project
     if (!draft.trim()) { setError("通知内容不能为空。"); return; }
     setSending(true); setError("");
     try {
-      await apiRequest(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/release-notification/send`, { method: "POST", body: JSON.stringify({ targets, content: draft }) });
-      setNotificationKind(null); setNotice(`${actionLabel(notificationKind)}通知已发送`);
+      const result = await apiRequest<{ deliveredCount: number; preferenceSaved?: boolean }>(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/release-notification/send`, { method: "POST", body: JSON.stringify({ targets, content: draft }) });
+      setNotificationKind(null); setNotice(`${actionLabel(notificationKind)}通知已发送给 ${result.deliveredCount} 个对象`);
+      if (result.preferenceSaved === false) setNotice(`${actionLabel(notificationKind)}通知已发送给 ${result.deliveredCount} 个对象；通知对象偏好保存失败，下次仍可重新选择。`);
     } catch (reason) { setError(`需求已${actionLabel(notificationKind)}，但飞书通知发送失败：${reason instanceof Error ? reason.message : "请稍后重试。"}`); } finally { setSending(false); }
   }
 
