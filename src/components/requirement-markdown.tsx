@@ -36,6 +36,27 @@ function escapeSvgText(value: string) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
 }
 
+function normalizeFlowchartLabel(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/&quot;|&#34;|&#x22;/gi, '"')
+    .replace(/&apos;|&#39;|&#x27;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#(\d+);/g, (_match, code: string) => {
+      const point = Number(code);
+      return Number.isInteger(point) && point >= 0 && point <= 0x10ffff ? String.fromCodePoint(point) : "";
+    })
+    .replace(/&#x([\da-f]+);/gi, (_match, code: string) => {
+      const point = Number.parseInt(code, 16);
+      return Number.isInteger(point) && point >= 0 && point <= 0x10ffff ? String.fromCodePoint(point) : "";
+    })
+    .replace(/^[\s\"“”‘’]+|[\s\"“”‘’]+$/g, "")
+    .trim();
+}
+
 function renderFlowchartFallback(source: string) {
   type Node = { id: string; label: string; decision: boolean };
   type Edge = { from: string; to: string; label: string; dashed: boolean };
@@ -54,7 +75,7 @@ function renderFlowchartFallback(source: string) {
 
   for (const line of source.split("\n")) {
     for (const match of line.matchAll(/([A-Za-z][\w-]*)\s*(?:\[([^\]]+)\]|\{([^}]+)\})/g)) {
-      ensureNode(match[1], match[2] || match[3] || match[1], Boolean(match[3]));
+      ensureNode(match[1], normalizeFlowchartLabel(match[2] || match[3] || match[1]), Boolean(match[3]));
     }
     // A node shape can be declared on the same line as an edge
     // (A[开始] --> B[下一步]). Remove only the shape text before parsing
@@ -67,7 +88,7 @@ function renderFlowchartFallback(source: string) {
     for (const match of edgeLine.matchAll(/([A-Za-z][\w-]*)\s*(-->|-\.->)\s*(?:\|([^|]+)\|\s*)?([A-Za-z][\w-]*)/g)) {
       const from = match[1];
       const to = match[4];
-      const label = (match[3] || "").trim();
+      const label = normalizeFlowchartLabel(match[3] || "");
       ensureNode(from);
       ensureNode(to);
       if (!edges.some((edge) => edge.from === from && edge.to === to && edge.label === label)) edges.push({ from, to, label, dashed: match[2].startsWith("-.") });
@@ -75,14 +96,14 @@ function renderFlowchartFallback(source: string) {
     for (const match of edgeLine.matchAll(/([A-Za-z][\w-]*)\s*-\.\s*([^\.\r\n]+?)\s*\.->\s*([A-Za-z][\w-]*)/g)) {
       const from = match[1];
       const to = match[3];
-      const label = match[2].trim();
+      const label = normalizeFlowchartLabel(match[2]);
       ensureNode(from);
       ensureNode(to);
       if (!edges.some((edge) => edge.from === from && edge.to === to && edge.label === label)) edges.push({ from, to, label, dashed: true });
     }
     for (const match of edgeLine.matchAll(/([A-Za-z][\w-]*)\s*(-->|-\.->)\s*(?:\|([^|]+)\|\s*)?([A-Za-z][\w-]*)\s*&\s*([A-Za-z][\w-]*)/g)) {
       const from = match[1];
-      const label = (match[3] || "").trim();
+      const label = normalizeFlowchartLabel(match[3] || "");
       ensureNode(from);
       for (const to of [match[4], match[5]]) {
         ensureNode(to);
@@ -188,13 +209,13 @@ function renderFlowchartFallback(source: string) {
   const nodeSvg = [...nodes.values()].map((node) => {
     const point = positions.get(node.id);
     if (!point) return "";
-    const words = [...node.label].reduce<string[]>((lines, character) => {
+    const words = node.label.split(/\r?\n/).flatMap((line) => [...line].reduce<string[]>((lines, character) => {
       const current = lines[lines.length - 1] || "";
       if (current.length >= 16) lines.push(character);
       else if (lines.length) lines[lines.length - 1] = current + character;
       else lines.push(character);
       return lines;
-    }, []);
+    }, []));
     const text = words.slice(0, 3).map((line, index) => `<tspan x="${point.x}" dy="${index ? 16 : 0}">${escapeSvgText(line)}${index === 2 && words.length > 3 ? "…" : ""}</tspan>`).join("");
     const textOffset = (Math.min(words.length, 3) - 1) * 8;
     const shape = node.decision
@@ -300,10 +321,10 @@ function DiagramViewport({ svg, className = "" }: { svg: string; className?: str
 
   return <div ref={containerRef} style={focusStyle} className={`mermaid-diagram ${className}${fullscreen ? " is-mermaid-focused" : ""}${dragging ? " is-dragging" : ""}`} onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishPointer} onPointerCancel={finishPointer} onDragStart={(event) => event.preventDefault()}>
     <div className="mermaid-controls" role="toolbar" aria-label="流程图查看工具">
-      <button type="button" className="mermaid-zoom-button" onClick={() => setScale((value) => Math.max(25, value - 25))} title="缩小流程图" aria-label="缩小流程图"><Icon name="zoomOut" /></button>
-      <button type="button" onClick={() => setScale(100)} title="还原流程图大小" aria-label="还原流程图大小"><Icon name="refresh" /></button>
-      <button type="button" onClick={() => setScale((value) => Math.min(500, value + 25))} title="放大流程图" aria-label="放大流程图"><Icon name="plus" /></button>
-      <button type="button" onClick={toggleFullscreen} title={fullscreen ? "退出完整流程图" : "展开完整流程图"} aria-label={fullscreen ? "退出完整流程图" : "展开完整流程图"}><Icon name={fullscreen ? "minimize" : "maximize"} /></button>
+      <button type="button" className="mermaid-zoom-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setScale((value) => Math.max(25, value - 25)); }} title="缩小流程图" aria-label="缩小流程图"><Icon name="zoomOut" /></button>
+      <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setScale(100); }} title="还原流程图大小" aria-label="还原流程图大小"><Icon name="refresh" /></button>
+      <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setScale((value) => Math.min(500, value + 25)); }} title="放大流程图" aria-label="放大流程图"><Icon name="plus" /></button>
+      <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); toggleFullscreen(); }} title={fullscreen ? "退出完整流程图" : "展开完整流程图"} aria-label={fullscreen ? "退出完整流程图" : "展开完整流程图"}><Icon name={fullscreen ? "minimize" : "maximize"} /></button>
     </div>
     <div className="mermaid-canvas" style={{ zoom: scale / 100 } as CSSProperties} dangerouslySetInnerHTML={{ __html: svg }} />
   </div>;
