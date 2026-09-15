@@ -1200,8 +1200,10 @@ export function RequirementWorkspace({
     projects.find((project) => project.id === activeProjectId) ??
     detail?.project ??
     projects[0];
-  const selectedWorkbuddyProject =
-    projects.find((project) => project.id === activeProjectId) ?? detail?.project;
+  // The library-level views do not have an explicit active project. Reuse the
+  // workspace's resolved project so the global Workbuddy entry still has a
+  // deterministic project context instead of silently doing nothing.
+  const selectedWorkbuddyProject = activeProject;
 
   const openWorkbuddySettings = useCallback((project = selectedWorkbuddyProject) => {
     setProfileMenuOpen(false);
