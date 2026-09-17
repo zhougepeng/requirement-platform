@@ -38,6 +38,7 @@ yarn-error.log*
 # local runtime state and unpacked demo artifacts
 /data/requirement-platform/
 /.local-*.log
+/server-3300*.log
 /.npm-cache/
 
 # vercel
