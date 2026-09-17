@@ -40,7 +40,7 @@ async function waitUntilReady() {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
       const response = await request("/login");
-      if (response.status === 200) return;
+      if (response.status === 307) return;
     } catch {
       // 进程刚启动时连接尚不可用，继续等待。
     }
@@ -86,6 +86,17 @@ try {
   const deepLink = await request("/r/ERP-001?version=3");
   expect(deepLink.status === 307, "未登录需求链接未跳转登录页。");
   expect(locationPath(deepLink) === "/login?returnTo=%2Fr%2FERP-001%3Fversion%3D3", "需求链接 returnTo 不正确。");
+
+  const login = await request("/login?returnTo=%2Fr%2FERP-001%3Fversion%3D3");
+  expect(login.status === 307 && locationPath(login) === "/auth/login?returnTo=%2Fr%2FERP-001%3Fversion%3D3", "登录页未转入飞书确认授权入口。");
+
+  const authorize = await request("/auth/login?returnTo=https%3A%2F%2Fevil.example");
+  expect(authorize.status === 307, "飞书确认授权地址未生成。");
+  const authorizeUrl = new URL(authorize.headers.get("location"));
+  expect(authorizeUrl.origin === "https://open.feishu.cn" && authorizeUrl.pathname === "/open-apis/authen/v1/index", "默认登录未使用飞书确认授权页。");
+  const authorizeCookie = cookieValue(authorize, "requirement_platform_oauth_state");
+  expect(authorizeCookie, "飞书确认授权缺少 state Cookie。");
+  expect(readOAuthState(authorizeCookie).returnTo === "/", "飞书确认授权未拒绝外部 returnTo。");
 
   const qr = await request("/api/auth/feishu?returnTo=https%3A%2F%2Fevil.example");
   expect(qr.status === 200, "二维码授权地址未生成。");
