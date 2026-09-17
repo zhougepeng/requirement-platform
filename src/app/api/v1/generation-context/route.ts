@@ -10,13 +10,14 @@ export async function GET(request: Request) {
     await actorFromRequest(request);
     const url = new URL(request.url);
     const type = url.searchParams.get("type");
-    if (type && type !== "prd" && type !== "demo") throw new Error("生成类型无效。");
+    const allowedTypes = new Set(["prd_create", "prd_update", "demo_create", "demo_update"]);
+    if (type && !allowedTypes.has(type)) throw new Error("生成类型无效。");
     return apiJson(await getGenerationContext({
       requirementId: url.searchParams.get("requirementId") || undefined,
       requirementCode: url.searchParams.get("requirementCode") || undefined,
       projectId: url.searchParams.get("projectId") || undefined,
       productId: url.searchParams.get("productId") || undefined,
-      type: type as "prd" | "demo" | undefined,
+      type: type as "prd_create" | "prd_update" | "demo_create" | "demo_update" | undefined,
     }));
   } catch (error) {
     return apiError(error);

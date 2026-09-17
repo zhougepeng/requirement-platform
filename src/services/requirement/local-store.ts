@@ -760,13 +760,21 @@ export async function getProductGenerationContext(productId: string) {
   return clone({ productId, globalSpec, productSpec: spec, rules: spec.rules, prd: spec.prd, tokens: spec.tokens, components: spec.components, demo: spec.demo, componentLibrary: productComponentLibrary(globalSpec, spec) });
 }
 
-export async function getGenerationContext(input: { requirementId?: string; requirementCode?: string; projectId?: string; productId?: string; type?: "prd" | "demo" }) {
+export type GenerationContextType = "prd_create" | "prd_update" | "demo_create" | "demo_update";
+
+export async function getGenerationContext(input: { requirementId?: string; requirementCode?: string; projectId?: string; productId?: string; type?: GenerationContextType }) {
   const store = await ensureStore();
   const requirement = input.requirementId || input.requirementCode
     ? store.requirements.find((item) => item.id === input.requirementId || item.code === input.requirementId || item.code === input.requirementCode)
     : undefined;
   const productId = input.productId || requirement?.productId || "";
-  const [globalSpec, productSpec, pmPlaybook] = await Promise.all([getGlobalSpec(), productId ? getProductSpec(productId) : Promise.resolve(emptyProductSpec("")), getPmSkillPlaybook()]);
+  const type = input.type ?? "demo_update";
+  const usePmPlaybook = type === "prd_create" || type === "demo_create";
+  const [globalSpec, productSpec, pmPlaybook] = await Promise.all([
+    getGlobalSpec(),
+    productId ? getProductSpec(productId) : Promise.resolve(emptyProductSpec("")),
+    usePmPlaybook ? getPmSkillPlaybook() : Promise.resolve({ entries: [], truncated: false, total: 0 }),
+  ]);
   const projectId = input.projectId || requirement?.projectId || "";
   const currentVersion = requirement ? store.versions.find((item) => item.id === requirement.currentVersionId) : undefined;
   return clone({
@@ -775,9 +783,9 @@ export async function getGenerationContext(input: { requirementId?: string; requ
     requirementContext: requirement ? { id: requirement.id, code: requirement.code, title: requirement.title, projectId, productId, versionNo: currentVersion?.number, prd: currentVersion?.prd ?? "" } : { projectId, productId },
     effectiveSpecVersions: { global: globalSpec.version, product: productId ? productSpec.version : null },
     componentLibrary: productComponentLibrary(globalSpec, productSpec),
-    // 产品经理经验库跟人走，不是产品规范：只作为“怎么做”的经验进入提示词，没有内容时为空数组。
+    // 产品经理经验库只用于新建 PRD / Demo；更新现有产物时从数据层直接排除。
     pmPlaybook,
-    type: input.type ?? "demo",
+    type,
   });
 }
 
