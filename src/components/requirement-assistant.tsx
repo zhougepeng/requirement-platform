@@ -6,6 +6,8 @@ import {
   useRef,
   useState,
 } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Icon } from "@/components/icons";
 
 type AssistantScope = "current-requirement" | "current-project" | "all-published";
@@ -192,29 +194,25 @@ export function RequirementAssistant({ context, onOpenRequirement, onOpenTestCas
     }
   }
 
-  const contextDetail = context.kind === "requirement"
-    ? `${context.projectName ?? "当前项目"} ＞ ${context.requirementTitle ?? context.requirementCode} ＞ V${context.versionNo ?? "当前"}`
-    : context.kind === "project" ? `${context.projectName ?? "当前项目"} ＞ 全部需求` : "全部需求";
-
   return <>
     <button ref={triggerRef} type="button" className="assistant-trigger" onClick={() => { if (ignoreTriggerClickRef.current) { ignoreTriggerClickRef.current = false; return; } setOpen(true); }} onPointerDown={beginTriggerDrag} onPointerMove={moveTrigger} onPointerUp={endTriggerDrag} onPointerCancel={endTriggerDrag} title="打开需求智能体；可拖拽调整位置" aria-label="打开需求智能体，可拖拽调整位置"><Icon name="message" /><span className="sr-only">需求智能体</span></button>
-    {open ? <section className="assistant-panel" role="dialog" aria-modal="false" aria-labelledby="assistant-title">
-      <header><div><small>需求智能体</small><h2 id="assistant-title">{contextDetail}</h2></div><button className="assistant-close" onClick={() => setOpen(false)} aria-label="关闭需求智能体">×</button></header>
+    {open ? <section className="assistant-panel" role="dialog" aria-modal="false" aria-label="需求智能体">
+      <header><div><small>需求智能体</small></div><button className="assistant-close" onClick={() => setOpen(false)} aria-label="关闭需求智能体">×</button></header>
       <div className="assistant-messages" aria-live="polite">
         {messages.length ? messages.map((message) => <article className={`assistant-message is-${message.role}`} key={message.id}>
-          <span>{message.role === "assistant" ? "AI" : "我"}</span><div><p>{message.content}</p>{message.result ? <AnswerContent result={message.result} onOpenRequirement={onOpenRequirement} onOpenTestCases={onOpenTestCases} onOpenDemo={() => message.result?.demo?.url && window.open(message.result.demo.url, "_blank", "noopener,noreferrer")} onAddGap={() => void addGap(message)} gapSaving={gapSaving === message.id} gapSaved={gapSaving === `done:${message.id}`} /> : null}</div>
+          <div>{message.role === "assistant" ? <div className="assistant-response-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div> : <p>{message.content}</p>}{message.result ? <AnswerContent result={message.result} onOpenRequirement={onOpenRequirement} onOpenTestCases={onOpenTestCases} onOpenDemo={() => message.result?.demo?.url && window.open(message.result.demo.url, "_blank", "noopener,noreferrer")} onAddGap={() => void addGap(message)} gapSaving={gapSaving === message.id} gapSaved={gapSaving === `done:${message.id}`} /> : null}</div>
         </article>) : <div className="assistant-empty"><b>{context.kind === "library" ? "需求库里想了解什么？" : "项目需求需要确认什么？"}</b><span>回答使用已同步的最新需求、PRD、测试和上线状态。</span><div className="assistant-quick-questions">{quickQuestions(context).map((item) => <button key={item} onClick={() => void ask(item)}>{item}</button>)}</div></div>}
-        {sending ? <article className="assistant-message is-assistant is-pending"><span>AI</span><p>正在检索需求知识库…</p></article> : null}
+        {sending ? <article className="assistant-message is-assistant is-pending"><p>正在检索需求知识库…</p></article> : null}
         {error ? <p className="assistant-error">{error}</p> : null}
       </div>
-      <div className="assistant-composer"><textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void ask(); } }} placeholder="询问需求流程、规则、字段或异常处理…" maxLength={2000} aria-label="向需求智能体提问" rows={2} /><button className="assistant-send" onClick={() => void ask()} disabled={!question.trim() || sending} aria-label="发送问题"><Icon name="send" /></button><small>Enter 发送，Shift + Enter 换行</small></div>
+      <div className="assistant-composer"><textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void ask(); } }} placeholder="询问需求流程、规则、字段或异常处理…" maxLength={2000} aria-label="向需求智能体提问" rows={2} /><button className="assistant-send" onClick={() => void ask()} disabled={!question.trim() || sending} aria-label="发送问题"><Icon name="send" /></button></div>
     </section> : null}
   </>;
 }
 
 function AnswerContent({ result, onOpenRequirement, onOpenTestCases, onOpenDemo, onAddGap, gapSaving, gapSaved }: { result: AssistantAnswer; onOpenRequirement?: (requirementCode: string, versionNo?: number) => void; onOpenTestCases?: () => void; onOpenDemo: () => void; onAddGap: () => void; gapSaving: boolean; gapSaved: boolean }) {
   return <div className="assistant-answer-detail">
-    <small className="assistant-section-label">要点</small>
+    <div className="assistant-answer-meta"><span className={`assistant-answer-status is-${result.status}`}>{result.status === "defined" ? "已确认" : result.status === "partial" ? "部分覆盖" : result.status === "conflict" ? "存在差异" : "待补充"}</span>{result.keyPoints.length ? <small className="assistant-section-label">要点</small> : null}</div>
     {result.keyPoints.length ? <ul>{result.keyPoints.map((item) => <li key={item}>{item}</li>)}</ul> : null}
     {result.flow.length ? <p className="assistant-flow">{result.flow.join(" → ")}</p> : null}
     {result.comparison ? <div className="assistant-comparison"><table><thead><tr>{result.comparison.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{result.comparison.rows.map((row, index) => <tr key={`${index}-${row.join("-")}`}>{row.map((cell, cellIndex) => <td key={`${cellIndex}-${cell}`}>{cell}</td>)}</tr>)}</tbody></table></div> : null}

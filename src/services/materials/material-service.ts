@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export type MaterialScope = "project" | "public";
+export type MaterialScope = "project" | "public" | "pm_skill";
 export type MaterialOrigin = "manual" | "system_generated";
 export type Material = {
   id: string;
@@ -57,7 +57,7 @@ async function readStore(): Promise<MaterialStore> {
     const parsed = JSON.parse(await readFile(STORE_FILE, "utf8")) as Partial<MaterialStore>;
     return {
       schemaVersion: 1,
-      materials: Array.isArray(parsed.materials) ? parsed.materials.filter((item): item is Material => Boolean(item?.id && item.title && item.content && (item.scope === "project" || item.scope === "public"))).map((item) => ({
+      materials: Array.isArray(parsed.materials) ? parsed.materials.filter((item): item is Material => Boolean(item?.id && item.title && item.content && (item.scope === "project" || item.scope === "public" || item.scope === "pm_skill"))).map((item) => ({
         ...item,
         origin: item.origin === "system_generated" ? "system_generated" : "manual",
         userManaged: item.userManaged === true,
@@ -68,7 +68,7 @@ async function readStore(): Promise<MaterialStore> {
         return [{
           id: item.id,
           name: item.name,
-          scope: item.scope === "project" ? "project" : "public",
+          scope: item.scope === "project" ? "project" : item.scope === "pm_skill" ? "pm_skill" : "public",
           projectId: item.scope === "project" && typeof item.projectId === "string" ? item.projectId : undefined,
           parentId: typeof item.parentId === "string" ? item.parentId : undefined,
           createdAt: typeof item.createdAt === "string" ? item.createdAt : "",
@@ -118,6 +118,41 @@ export async function listMaterials(input: { scope: MaterialScope; projectId?: s
 
 export async function listAllMaterials() {
   return clone((await readStore()).materials.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
+}
+
+/** 注入生成上下文的产品经理经验总字数上限；超出额度的条目会被跳过，并在 truncated 上标记。 */
+export const PM_SKILL_PLAYBOOK_MAX_CHARS = 6_000;
+
+export type PmSkillPlaybookEntry = { id: string; title: string; directory?: string; content: string };
+export type PmSkillPlaybook = { entries: PmSkillPlaybookEntry[]; truncated: boolean; total: number };
+
+/**
+ * 产品经理经验库：跟人走的全局工作流程与经验，只用于 PRD / Demo 生成时的“怎么做”提示。
+ * 它与产品规范不是一回事：产品规范（globalSpec / productSpec）描述产品该长什么样，这里描述这个人怎么干活。
+ */
+export async function getPmSkillPlaybook(maxChars = PM_SKILL_PLAYBOOK_MAX_CHARS): Promise<PmSkillPlaybook> {
+  const store = await readStore();
+  const directoryNames = new Map(store.directories.map((item) => [item.id, item.name]));
+  const materials = store.materials
+    .filter((item) => item.scope === "pm_skill")
+    .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.createdAt.localeCompare(left.createdAt));
+  const entries: PmSkillPlaybookEntry[] = [];
+  let used = 0;
+  let truncated = false;
+  for (const material of materials) {
+    if (maxChars - used <= 0) { truncated = true; break; }
+    const overhead = material.title.length + (material.directoryId ? directoryNames.get(material.directoryId)?.length ?? 0 : 0) + 24;
+    const budget = maxChars - used - overhead;
+    const content = material.content.trim();
+    if (budget <= 0) { truncated = true; continue; }
+    // 单条超长经验只有在它是第一条时才截断保留，避免整库被一条记录挤空。
+    const kept = content.length <= budget ? content : entries.length === 0 ? content.slice(0, budget) : null;
+    if (kept === null) { truncated = true; continue; }
+    if (kept.length < content.length) truncated = true;
+    entries.push({ id: material.id, title: material.title, directory: material.directoryId ? directoryNames.get(material.directoryId) : undefined, content: kept });
+    used += overhead + kept.length;
+  }
+  return { entries, truncated, total: materials.length };
 }
 
 export async function getMaterial(id: string) {

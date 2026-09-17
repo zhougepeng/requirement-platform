@@ -3,8 +3,13 @@ import "server-only";
 import { decodeSession, SESSION_COOKIE } from "@/services/auth/session";
 import { getEmployee, requireAdminEmployee, requirePublisherEmployee, requireViewerEmployee } from "@/services/auth/employee-store";
 import { resolvePersonalAccessToken } from "@/services/auth/personal-access-token-store";
+import { verifyWorkbuddyIntegrationToken } from "@/services/auth/workbuddy-sso";
 
-export type RequirementActor = { id: string; name: string; authSource?: "session" | "personal_access_token" | "local" };
+export type RequirementActor = {
+  id: string;
+  name: string;
+  authSource?: "session" | "personal_access_token" | "workbench_integration" | "local";
+};
 
 function sessionFromRequest(request: Request) {
   const value = request.headers.get("cookie")?.match(new RegExp(`(?:^|; )${SESSION_COOKIE}=([^;]+)`))?.[1];
@@ -14,6 +19,19 @@ function sessionFromRequest(request: Request) {
 function bearerToken(request: Request) {
   const supplied = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   return supplied || undefined;
+}
+
+async function workbenchIntegrationActor(request: Request): Promise<RequirementActor | undefined> {
+  const supplied = bearerToken(request);
+  if (!supplied?.startsWith("wbi_")) return undefined;
+  const identity = verifyWorkbuddyIntegrationToken(supplied);
+  if (!identity)
+    throw Object.assign(new Error("工作搭子授权无效或已过期，请刷新后重试。"), {
+      statusCode: 401,
+      code: "workbench_sso_invalid",
+    });
+  const employee = await requireViewerEmployee(identity.openId);
+  return { id: employee.openId, name: employee.name || identity.name, authSource: "workbench_integration" };
 }
 
 async function personalAccessTokenActor(request: Request): Promise<RequirementActor | undefined> {
@@ -34,6 +52,8 @@ export function sessionActorFromRequest(request: Request): RequirementActor | un
 
 export async function actorFromRequest(request: Request): Promise<RequirementActor | undefined> {
   if (process.env.AUTH_MODE !== "feishu") return undefined;
+  const integrationActor = await workbenchIntegrationActor(request);
+  if (integrationActor) return integrationActor;
   const tokenActor = await personalAccessTokenActor(request);
   if (tokenActor) return tokenActor;
   const session = sessionFromRequest(request);

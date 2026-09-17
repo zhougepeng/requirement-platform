@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     await publisherFromRequest(request);
     const input = z.object({
       name: z.string().trim().min(1).max(120),
-      scope: z.enum(["project", "public"]),
+      scope: z.enum(["project", "public", "pm_skill"]),
       projectId: z.string().trim().min(2).max(80).optional(),
       parentId: z.string().trim().min(2).max(100).optional(),
     }).superRefine((value, context) => {

@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 const updateSchema = z.object({
   title: z.string().trim().min(1).max(120).optional(),
   content: z.string().min(1).max(400_000).optional(),
-  scope: z.enum(["project", "public"]).optional(),
+  scope: z.enum(["project", "public", "pm_skill"]).optional(),
   projectId: z.string().trim().min(2).max(80).optional(),
   directoryId: z.string().trim().min(2).max(100).nullable().optional(),
 });

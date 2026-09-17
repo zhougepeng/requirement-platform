@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { CurrentRequirementKnowledgeSource } from "@/services/requirement/repository";
 import { listCurrentRequirementKnowledgeSources } from "@/services/requirement/repository";
-import { DifyKnowledgeClient, DifyKnowledgeError, isDifyKnowledgeConfigured, type DifyKnowledgeMetadata } from "@/services/assistant/dify-knowledge-client";
+import { HindsightKnowledgeClient, HindsightKnowledgeError, isHindsightConfigured, type HindsightKnowledgeMetadata } from "@/services/assistant/hindsight-knowledge-client";
 
 export type KnowledgeContentType = "requirement_summary" | "prd" | "test_case";
 export type KnowledgeSyncEntry = {
@@ -21,12 +21,12 @@ export type KnowledgeSyncEntry = {
 };
 
 type SyncStore = { schemaVersion: 1; entries: KnowledgeSyncEntry[] };
-type SyncDocument = { key: string; contentType: KnowledgeContentType; name: string; text: string; metadata: DifyKnowledgeMetadata };
+type SyncDocument = { key: string; contentType: KnowledgeContentType; name: string; text: string; metadata: HindsightKnowledgeMetadata };
 
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
   ? path.resolve(process.env.REQUIREMENT_PLATFORM_DATA_DIR)
   : path.join(process.cwd(), "data", "requirement-platform");
-const STORE_FILE = path.join(DATA_DIR, "dify-knowledge-sync.local.json");
+const STORE_FILE = path.join(DATA_DIR, "hindsight-knowledge-sync.local.json");
 let mutationQueue = Promise.resolve();
 let backgroundSync = Promise.resolve();
 
@@ -74,7 +74,7 @@ async function mutate<T>(operation: (store: SyncStore) => Promise<T> | T): Promi
   }
 }
 
-function metadata(source: CurrentRequirementKnowledgeSource, contentType: KnowledgeContentType): DifyKnowledgeMetadata {
+function metadata(source: CurrentRequirementKnowledgeSource, contentType: KnowledgeContentType): HindsightKnowledgeMetadata {
   return {
     project_id: source.projectId,
     project_name: source.projectName,
@@ -147,14 +147,13 @@ async function saveFailure(key: string, error: unknown) {
   });
 }
 
-async function syncDocument(store: SyncStore, client: DifyKnowledgeClient, document: SyncDocument) {
+async function syncDocument(store: SyncStore, client: HindsightKnowledgeClient, document: SyncDocument) {
   const bodyChecksum = checksum(`${document.name}\n${document.text}\n${JSON.stringify(document.metadata)}`);
   const current = store.entries.find((item) => item.key === document.key);
   try {
     if (current?.checksum === bodyChecksum && !current.lastError) return;
-    if (current?.documentId) await client.updateDocument(current.documentId, document);
-    const documentId = current?.documentId ?? await client.createDocument(document);
-    await client.updateMetadata(documentId, document.metadata);
+    const documentId = `requirement-platform:${document.key}`;
+    await client.retain({ documentId, text: document.text, metadata: document.metadata, tags: ["requirement-platform", `status:${document.metadata.status}`, `project:${document.metadata.project_id}`, `requirement:${document.metadata.requirement_id}`], timestamp: new Date().toISOString() });
     const entry: KnowledgeSyncEntry = { key: document.key, projectId: document.metadata.project_id, requirementCode: document.metadata.requirement_id, contentType: document.contentType, documentId, checksum: bodyChecksum, updatedAt: now() };
     const index = store.entries.findIndex((item) => item.key === document.key);
     if (index >= 0) store.entries[index] = entry;
@@ -168,13 +167,13 @@ async function syncDocument(store: SyncStore, client: DifyKnowledgeClient, docum
 }
 
 async function syncSourceInStore(store: SyncStore, source: CurrentRequirementKnowledgeSource) {
-  const client = new DifyKnowledgeClient();
+  const client = new HindsightKnowledgeClient();
   const documents = documentsFor(source);
   const prefix = `${source.projectId}:${source.requirementCode}:`;
   const expected = new Set(documents.map((item) => item.key));
   for (const stale of store.entries.filter((item) => item.key.startsWith(prefix) && !expected.has(item.key))) {
     if (stale.documentId) {
-      try { await client.deleteDocument(stale.documentId); } catch { /* a missing remote document is safe to forget */ }
+      try { await client.invalidateDocument(stale.documentId); } catch { /* a missing remote document is safe to forget */ }
     }
     store.entries.splice(store.entries.indexOf(stale), 1);
   }
@@ -182,9 +181,28 @@ async function syncSourceInStore(store: SyncStore, source: CurrentRequirementKno
 }
 
 export async function syncRequirementKnowledge(requirementCode: string) {
-  if (!isDifyKnowledgeConfigured()) return { skipped: true, reason: "not-configured" as const };
+  if (!isHindsightConfigured()) return { skipped: true, reason: "not-configured" as const };
   const source = (await listCurrentRequirementKnowledgeSources()).find((item) => item.requirementCode === requirementCode);
-  if (!source) return { skipped: true, reason: "not-found" as const };
+  if (!source) {
+    await mutate(async (store) => {
+      const client = new HindsightKnowledgeClient();
+      for (const entry of store.entries.filter((item) => item.requirementCode === requirementCode)) {
+        if (entry.documentId) await client.invalidateDocument(entry.documentId);
+      }
+      store.entries = store.entries.filter((item) => item.requirementCode !== requirementCode);
+    });
+    return { skipped: true, reason: "not-found" as const };
+  }
+  if (source.status !== "online" && source.status !== "scheduled") {
+    await mutate(async (store) => {
+      const client = new HindsightKnowledgeClient();
+      for (const entry of store.entries.filter((item) => item.requirementCode === requirementCode)) {
+        if (entry.documentId) await client.invalidateDocument(entry.documentId);
+      }
+      store.entries = store.entries.filter((item) => item.requirementCode !== requirementCode);
+    });
+    return { skipped: true, reason: "status-not-syncable" as const };
+  }
   try {
     await mutate(async (store) => { await syncSourceInStore(store, source); });
     return { skipped: false, requirementCode };
@@ -195,8 +213,17 @@ export async function syncRequirementKnowledge(requirementCode: string) {
 }
 
 export async function syncExistingKnowledge() {
-  if (!isDifyKnowledgeConfigured()) throw new DifyKnowledgeError("Dify 知识库尚未配置。请先设置 DIFY_API_BASE_URL、DIFY_API_KEY 和 DIFY_DATASET_ID。", 503);
-  const sources = await listCurrentRequirementKnowledgeSources();
+  if (!isHindsightConfigured()) throw new HindsightKnowledgeError("项目记忆尚未配置。请先设置 HINDSIGHT_API_BASE_URL、HINDSIGHT_TOKEN 和 HINDSIGHT_BANK_ID。", 503);
+  const allSources = await listCurrentRequirementKnowledgeSources();
+  const sources = allSources.filter((source) => source.status === "online" || source.status === "scheduled");
+  const eligibleCodes = new Set(sources.map((source) => source.requirementCode));
+  await mutate(async (store) => {
+    const client = new HindsightKnowledgeClient();
+    for (const entry of store.entries.filter((item) => !eligibleCodes.has(item.requirementCode))) {
+      if (entry.documentId) await client.invalidateDocument(entry.documentId);
+      store.entries.splice(store.entries.indexOf(entry), 1);
+    }
+  });
   const failed: Array<{ requirementCode: string; error: string }> = [];
   let synced = 0;
   for (const source of sources) {
@@ -210,19 +237,19 @@ export async function syncExistingKnowledge() {
   return { total: sources.length, synced, failed };
 }
 
-/** Persisted mapping used to reject Dify hits outside the platform's allowed scope. */
+/** Persisted mapping used to reject Hindsight hits outside the platform's allowed scope. */
 export async function listKnowledgeSyncEntries() {
   return clone((await readStore()).entries);
 }
 
-/** Writes never wait for Dify. A later assistant request retries failed work in the background. */
+/** Writes never wait for Hindsight. A later assistant request retries failed work in the background. */
 export function scheduleRequirementKnowledgeSync(requirementCode: string) {
-  if (!isDifyKnowledgeConfigured()) return;
+  if (!isHindsightConfigured()) return;
   backgroundSync = backgroundSync.then(async () => { await syncRequirementKnowledge(requirementCode); }).catch(() => undefined);
 }
 
 export function schedulePendingKnowledgeRetry() {
-  if (!isDifyKnowledgeConfigured()) return;
+  if (!isHindsightConfigured()) return;
   backgroundSync = backgroundSync.then(async () => {
     const entries = await readStore();
     const pendingCodes = [...new Set(entries.entries.filter((entry) => entry.lastError).map((entry) => entry.requirementCode))];

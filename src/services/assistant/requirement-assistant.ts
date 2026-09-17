@@ -95,8 +95,9 @@ function cleanJson(raw: string): ModelAnswer | undefined {
   }
 }
 
-function systemPrompt(detailed: boolean, mode: "current" | "future", usedOfflineFallback: boolean) {
-  return `你是需求管理平台中的产品知识助手。仅依据提供的 Dify 知识库片段回答，不得自行编造。
+function systemPrompt(detailed: boolean, mode: "current" | "future", usedOfflineFallback: boolean, hasEvidence: boolean) {
+  return `你是需求管理平台中的产品知识助手。仅依据提供的项目记忆片段回答，不得自行编造。
+${hasEvidence ? "当前已提供检索到的资料。" : "当前没有检索到任何相关资料。不要猜测产品事实、流程、版本或状态；请自然说明暂时无法确认，并给出一到两个能帮助继续查询的补充方向。"}
 最高规则：已上线需求是当前产品事实；已排期和未上线需求都是规划，不能说成当前已经支持。${mode === "future" ? "用户询问未来规划，只能依据已排期或未上线资料回答，并明确说明是已排期还是尚未上线。" : usedOfflineFallback ? "当前检索只命中已排期或未上线资料。先说明当前尚不能确认已支持，再简要说明已有规划及其状态。" : "普通查询的资料可能同时包含已上线、已排期和未上线需求。可以回答相关规划，但每条规划必须写明“已排期”或“未上线”；只有已上线来源才能说明当前已支持。"}
 回答先给结论，再给要点。不要复述问题、不要使用无意义开场、不要大段复制原文。来源只引用提供的来源 ID。${detailed ? "用户要求详细说明，可适度展开，但仍不要粘贴原文。" : "默认总长度控制在约 300 个汉字内，keyPoints 最多 3 条。"}
 只输出 JSON：{"status":"defined|partial|undefined|conflict","answer":"直接结论","keyPoints":["要点"],"sourceIds":["来源 ID"],"undefinedPoints":["缺失信息"]}`;
@@ -117,7 +118,7 @@ async function answerWithModel(question: string, chunks: RetrievedKnowledgeChunk
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model, temperature: 0, ...reasoningEffortPayload(reasoningEffort), response_format: { type: "json_object" }, messages: [
-      { role: "system", content: systemPrompt(detailed, mode, usedOfflineFallback) },
+      { role: "system", content: systemPrompt(detailed, mode, usedOfflineFallback, chunks.length > 0) },
       { role: "user", content: `以下内容已由需求平台按当前范围和权限过滤。\n\n${evidence}\n\n用户问题：${question}` },
     ] }),
     cache: "no-store",
@@ -133,11 +134,31 @@ async function answerWithModel(question: string, chunks: RetrievedKnowledgeChunk
 }
 
 function metaAnswer(detailed: boolean): RequirementAnswer {
-  const points = ["可询问当前已上线能力、需求流程、规则、异常和测试覆盖。", "询问下一版或规划时，会明确标为未上线。", "回答只使用需求平台同步到知识库的最新有效资料。"];
+  const points = ["可询问当前已上线能力、需求流程、规则、异常和测试覆盖。", "询问下一版或规划时，会明确标为未上线。", "回答只使用需求平台同步到项目记忆的最新有效资料。"];
   return { status: "defined", answer: "✅ 我可以回答需求库中的当前能力、规则、流程、测试和上线规划。", keyPoints: detailed ? points : points.slice(0, 2), flow: [], sources: [], undefinedPoints: [], relatedRequirements: [], testCases: [], detailed };
 }
 
-function noEvidenceAnswer(question: string, detailed: boolean, mode: "current" | "future"): RequirementAnswer {
+async function noEvidenceAnswer(question: string, detailed: boolean, mode: "current" | "future"): Promise<RequirementAnswer> {
+  try {
+    const modelAnswer = await answerWithModel(question, [], [], detailed, mode, false);
+    const answer = typeof modelAnswer.answer === "string" ? compact(modelAnswer.answer, detailed, detailed ? 4000 : 280) : "";
+    if (answer) {
+      const status = modelAnswer.status === "defined" || modelAnswer.status === "partial" || modelAnswer.status === "undefined" || modelAnswer.status === "conflict" ? modelAnswer.status : "undefined";
+      return {
+        status,
+        answer: /^(?:✅|⚠️|❌|🟡)/u.test(answer) ? answer : `🟡 ${answer}`,
+        keyPoints: textList(modelAnswer.keyPoints, detailed ? 8 : 3).map((item) => compact(item, detailed, detailed ? 500 : 120)),
+        flow: [],
+        sources: [],
+        undefinedPoints: textList(modelAnswer.undefinedPoints, detailed ? 8 : 3).map((item) => compact(item, detailed, 160)),
+        relatedRequirements: [],
+        testCases: [],
+        detailed,
+      };
+    }
+  } catch {
+    // Keep the deterministic safety response when the model itself is unavailable.
+  }
   const statement = mode === "future" ? "当前范围内没有找到已排期或未上线的规划资料。" : "当前范围内没有找到与问题相关的需求资料。";
   return { status: "undefined", answer: `🟡 ${statement}`, keyPoints: [], flow: [], sources: [], undefinedPoints: [compact(question, detailed, 140)], relatedRequirements: [], testCases: [], detailed };
 }

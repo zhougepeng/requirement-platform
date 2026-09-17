@@ -3,6 +3,7 @@ import { exchangeCode, FeishuLoginError, getFeishuUserIdentity, isFeishuTenantDi
 import { registerLoginEmployee } from "@/services/auth/employee-store";
 import { decodeOAuthLoginState, encodeSession, OAUTH_STATE_COOKIE, SESSION_COOKIE, shouldUseSecureCookies } from "@/services/auth/session";
 import { publicAppUrl } from "@/lib/public-app-url";
+import { recordRequirementAudit } from "@/services/requirement/repository";
 
 export const runtime = "nodejs";
 
@@ -28,6 +29,11 @@ export async function GET(request: Request) {
     }
     const user = await exchangeCode(code);
     await registerLoginEmployee(user);
+    try {
+      await recordRequirementAudit({ action: "login_platform", actor: { id: user.openId, name: user.name }, detail: "飞书登录" });
+    } catch {
+      // 审计日志写入失败不应阻断已经成功的登录。
+    }
     const response = NextResponse.redirect(publicAppUrl(savedLogin.returnTo, request.url));
     response.cookies.set(OAUTH_STATE_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
     response.cookies.set(SESSION_COOKIE, encodeSession(user), { httpOnly: true, sameSite: "lax", secure: shouldUseSecureCookies(), path: "/", maxAge: 8 * 60 * 60 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import mermaid from "mermaid";
 import ReactMarkdown from "react-markdown";
@@ -226,67 +226,25 @@ function renderFlowchartFallback(source: string) {
   return `<svg class="flowchart-fallback-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="业务流程图"><defs><marker id="flowchart-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#64748b"/></marker></defs>${edgeSvg}${nodeSvg}</svg>`;
 }
 
-function FlowchartFallback({ source }: { source: string }) {
+function FlowchartFallback({ source, isFocused = false, onFullscreenChange }: { source: string; isFocused?: boolean; onFullscreenChange?: (value: boolean) => void }) {
   const svg = renderFlowchartFallback(source);
   if (!svg) return <div className="mermaid-diagram is-failed"><p>流程图语法无法渲染，保留原始内容供检查。</p><pre><code>{source}</code></pre></div>;
-  return <DiagramViewport svg={svg} className="flowchart-fallback" />;
+  return <DiagramViewport svg={svg} className="flowchart-fallback" isFocused={isFocused} onFullscreenChange={onFullscreenChange} />;
 }
 
-function DiagramViewport({ svg, className = "" }: { svg: string; className?: string }) {
+function DiagramViewport({ svg, className = "", isFocused = false, onFullscreenChange }: { svg: string; className?: string; isFocused?: boolean; onFullscreenChange?: (value: boolean) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; startLeft: number; startTop: number; didDrag: boolean } | null>(null);
   const [scale, setScale] = useState(100);
-  const [fullscreen, setFullscreen] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [focusSize, setFocusSize] = useState({ width: 0, height: 0 });
-
-  useEffect(() => {
-    if (!fullscreen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFullscreen(false);
-    };
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      const container = containerRef.current;
-      if (container && !container.contains(event.target as Node)) setFullscreen(false);
-    };
-    document.body.classList.add("mermaid-focus-open");
-    document.addEventListener("keydown", closeOnEscape);
-    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
-    return () => {
-      document.body.classList.remove("mermaid-focus-open");
-      document.removeEventListener("keydown", closeOnEscape);
-      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
-    };
-  }, [fullscreen]);
-
-  const toggleFullscreen = () => {
-    if (fullscreen) {
-      setFullscreen(false);
-      return;
-    }
-    const container = containerRef.current;
-    const diagram = container?.querySelector("svg");
-    if (!diagram) return;
-    const viewBox = diagram.viewBox?.baseVal;
-    const measuredWidth = diagram.getBoundingClientRect().width;
-    const measuredHeight = diagram.getBoundingClientRect().height;
-    const naturalWidth = viewBox?.width || measuredWidth;
-    const naturalHeight = viewBox?.height || measuredHeight;
-    const availableWidth = Math.max(360, window.innerWidth - 40);
-    const availableHeight = Math.max(260, window.innerHeight - 48);
-    const width = Math.min(availableWidth, Math.max(360, (naturalWidth * scale) / 100 + 36));
-    const height = Math.min(
-      availableHeight,
-      Math.max(260, ((width - 36) * naturalHeight) / Math.max(1, naturalWidth) + 60),
-    );
-    setFocusSize({ width: Math.round(width), height: Math.round(height) });
-    setFullscreen(true);
-  };
+  const visibleScale = scale;
+  const changeScale = (delta: number) => setScale((value) => Math.max(25, Math.min(500, value + delta)));
+  const toggleFullscreen = () => onFullscreenChange?.(!isFocused);
 
   const onWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if ((event.target as Element).closest(".mermaid-controls")) return;
     event.preventDefault();
-    setScale((value) => Math.max(25, Math.min(500, value + (event.deltaY < 0 ? 10 : -10))));
+    changeScale(event.deltaY < 0 ? 10 : -10);
   };
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || (event.target as Element).closest(".mermaid-controls")) return;
@@ -315,22 +273,20 @@ function DiagramViewport({ svg, className = "" }: { svg: string; className?: str
     setDragging(false);
   };
 
-  const focusStyle = fullscreen && focusSize.width
-    ? ({ "--mermaid-focus-width": `${focusSize.width}px`, "--mermaid-focus-height": `${focusSize.height}px` } as CSSProperties)
-    : undefined;
+  const viewportStyle = { "--diagram-scale": String(visibleScale / 100) } as CSSProperties;
 
-  return <div ref={containerRef} style={focusStyle} className={`mermaid-diagram ${className}${fullscreen ? " is-mermaid-focused" : ""}${dragging ? " is-dragging" : ""}`} onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishPointer} onPointerCancel={finishPointer} onDragStart={(event) => event.preventDefault()}>
+  return <div ref={containerRef} style={viewportStyle} className={`mermaid-diagram ${className}${isFocused ? " is-mermaid-focused" : ""}${dragging ? " is-dragging" : ""}`} onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishPointer} onPointerCancel={finishPointer} onDragStart={(event) => event.preventDefault()}>
     <div className="mermaid-controls" role="toolbar" aria-label="流程图查看工具">
-      <button type="button" className="mermaid-zoom-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setScale((value) => Math.max(25, value - 25)); }} title="缩小流程图" aria-label="缩小流程图"><Icon name="zoomOut" /></button>
+      <button type="button" className="mermaid-zoom-button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); changeScale(-25); }} title="缩小流程图" aria-label="缩小流程图"><Icon name="zoomOut" /></button>
       <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setScale(100); }} title="还原流程图大小" aria-label="还原流程图大小"><Icon name="refresh" /></button>
-      <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setScale((value) => Math.min(500, value + 25)); }} title="放大流程图" aria-label="放大流程图"><Icon name="plus" /></button>
-      <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); toggleFullscreen(); }} title={fullscreen ? "退出完整流程图" : "展开完整流程图"} aria-label={fullscreen ? "退出完整流程图" : "展开完整流程图"}><Icon name={fullscreen ? "minimize" : "maximize"} /></button>
+      <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); changeScale(25); }} title="放大流程图" aria-label="放大流程图"><Icon name="plus" /></button>
+      <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); toggleFullscreen(); }} title={isFocused ? "退出完整流程图" : "展开完整流程图"} aria-label={isFocused ? "退出完整流程图" : "展开完整流程图"}><Icon name={isFocused ? "minimize" : "maximize"} /></button>
     </div>
-    <div className="mermaid-canvas" style={{ zoom: scale / 100 } as CSSProperties} dangerouslySetInnerHTML={{ __html: svg }} />
+    <div className="mermaid-canvas" dangerouslySetInnerHTML={{ __html: svg }} />
   </div>;
 }
 
-function MermaidDiagram({ source }: { source: string }) {
+const MermaidDiagram = memo(function MermaidDiagram({ source, isFocused = false, onFullscreenChange }: { source: string; isFocused?: boolean; onFullscreenChange?: (value: boolean) => void }) {
   const reactId = useId();
   const isFlowchart = /^\s*(?:flowchart|graph)\s+/m.test(source);
   const [svg, setSvg] = useState("");
@@ -369,10 +325,10 @@ function MermaidDiagram({ source }: { source: string }) {
 
   if (failed) return <div className="mermaid-diagram is-failed"><p>流程图语法无法渲染，保留原始内容供检查。</p><pre><code>{source}</code></pre></div>;
   // Mermaid 11 的异步布局模块在当前 Next 开发环境中可能永远不返回；流程图直接使用本地 SVG 渲染，避免切换 PRD 后长期停在加载态。
-  if (showFallback || isFlowchart) return <FlowchartFallback source={source} />;
+  if (showFallback || isFlowchart) return <FlowchartFallback source={source} isFocused={isFocused} onFullscreenChange={onFullscreenChange} />;
   if (!svg) return <div className="mermaid-diagram is-loading" aria-busy="true">正在渲染流程图…</div>;
-  return <DiagramViewport svg={svg} />;
-}
+  return <DiagramViewport svg={svg} isFocused={isFocused} onFullscreenChange={onFullscreenChange} />;
+});
 
 function resolveImageUrl(source: string, demoEntryUrl: string, assetBaseUrl?: string) {
   const value = source.trim();
@@ -451,6 +407,7 @@ export function RequirementMarkdown({ source, demoEntryUrl, assetBaseUrl, classN
   const [commentText, setCommentText] = useState("");
   const [sending, setSending] = useState(false);
   const [commentError, setCommentError] = useState("");
+  const [focusedDiagram, setFocusedDiagram] = useState<string | null>(null);
 
   useEffect(() => {
     const markerRoot = root.current;
@@ -486,16 +443,25 @@ export function RequirementMarkdown({ source, demoEntryUrl, assetBaseUrl, classN
     window.addEventListener("resize", schedule, { passive: true });
     window.addEventListener("scroll", schedule, { passive: true });
     markerRoot.addEventListener("scroll", schedule, { passive: true });
-    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(schedule);
-    observer?.observe(markerRoot);
+    // Flowchart controls can change the preview layout; watching the entire root
+    // here would trigger a parent rerender while the fullscreen panel is opening.
+    // Resize and scroll listeners below still keep comment positions current.
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", schedule);
       window.removeEventListener("scroll", schedule);
       markerRoot.removeEventListener("scroll", schedule);
-      observer?.disconnect();
     };
   }, [comments, onCommentPositions, source]);
+
+  useEffect(() => {
+    if (!focusedDiagram) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFocusedDiagram(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [focusedDiagram]);
 
   function captureSelection() {
     if (!commentMode || !documentId || !documentPath || !onCreateComment || !root.current) return;
@@ -552,7 +518,7 @@ export function RequirementMarkdown({ source, demoEntryUrl, assetBaseUrl, classN
         code: ({ className: codeClassName, children }) => {
           const language = /language-([^\s]+)/.exec(codeClassName ?? "")?.[1]?.toLowerCase();
           const value = String(children).replace(/\n$/, "");
-          if (language === "mermaid") return <MermaidDiagram key={value} source={value} />;
+          if (language === "mermaid") return <MermaidDiagram key={value} source={value} isFocused={focusedDiagram === value} onFullscreenChange={(next) => setFocusedDiagram(next ? value : null)} />;
           return <code className={codeClassName}>{children}</code>;
         },
         img: ({ src, alt }) => {

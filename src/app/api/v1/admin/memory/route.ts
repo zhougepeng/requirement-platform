@@ -29,9 +29,7 @@ export async function GET(request: Request) {
   try {
     await adminFromRequest(request);
     return apiJson(await settingsPayload());
-  } catch (error) {
-    return apiError(error);
-  }
+  } catch (error) { return apiError(error); }
 }
 
 export async function PUT(request: Request) {
@@ -39,9 +37,7 @@ export async function PUT(request: Request) {
     await adminFromRequest(request);
     saveHindsightConfiguration(configurationSchema.parse(await request.json()));
     return apiJson(await settingsPayload());
-  } catch (error) {
-    return apiError(error);
-  }
+  } catch (error) { return apiError(error); }
 }
 
 export async function POST(request: Request) {
@@ -49,12 +45,10 @@ export async function POST(request: Request) {
     await adminFromRequest(request);
     const { action } = actionSchema.parse(await request.json());
     if (action === "verify") {
-      const result = await new HindsightKnowledgeClient().verifyConnection();
-      return apiJson({ ...(await settingsPayload()), verification: result });
+      const verification = await new HindsightKnowledgeClient().verifyConnection();
+      return apiJson({ ...(await settingsPayload()), verification });
     }
     const requirements = await syncExistingKnowledge();
     return apiJson({ ...(await settingsPayload()), syncResult: requirements });
-  } catch (error) {
-    return apiError(error);
-  }
+  } catch (error) { return apiError(error); }
 }

@@ -296,13 +296,13 @@ function RequirementBoard({
   const overview = useMemo(() => {
     const requirements = projects.flatMap((project) => project.requirements);
     const online = requirements.filter(
-      (requirement) => requirement.status === "online",
+      (requirement) => releaseStatusOfSummary(requirement) === "online",
     ).length;
     const scheduled = requirements.filter(
-      (requirement) => requirement.status === "scheduled",
+      (requirement) => releaseStatusOfSummary(requirement) === "scheduled",
     ).length;
     const ongoingProjects = projects.filter((project) =>
-      project.requirements.some((requirement) => requirement.status !== "online"),
+      project.requirements.some((requirement) => releaseStatusOfSummary(requirement) !== "online"),
     ).length;
     return {
       projects: projects.length,
@@ -313,6 +313,10 @@ function RequirementBoard({
       offline: requirements.length - online - scheduled,
     };
   }, [projects]);
+  const ongoingProjectRows = useMemo(
+    () => projects.filter((project) => project.requirements.some((requirement) => releaseStatusOfSummary(requirement) !== "online")),
+    [projects],
+  );
   const ownerRows = useMemo(() => {
     const rows = new Map<string, { total: number; online: number; scheduled: number }>();
     for (const project of projects) {
@@ -320,8 +324,9 @@ function RequirementBoard({
         const owner = requirement.owner ?? project.owner ?? "未分配";
         const current = rows.get(owner) ?? { total: 0, online: 0, scheduled: 0 };
         current.total += 1;
-        if (requirement.status === "online") current.online += 1;
-        if (requirement.status === "scheduled") current.scheduled += 1;
+        const status = releaseStatusOfSummary(requirement);
+        if (status === "online") current.online += 1;
+        if (status === "scheduled") current.scheduled += 1;
         rows.set(owner, current);
       }
     }
@@ -357,8 +362,9 @@ function RequirementBoard({
           projectName: project.name,
           requirementName: requirement.title,
         };
-        if (requirement.status === "online") byMonth.get(month)?.onlineItems.push(item);
-        if (requirement.status === "scheduled") byMonth.get(month)?.scheduledItems.push(item);
+        const status = releaseStatusOfSummary(requirement);
+        if (status === "online") byMonth.get(month)?.onlineItems.push(item);
+        if (status === "scheduled") byMonth.get(month)?.scheduledItems.push(item);
       }
     }
     return buckets;
@@ -402,13 +408,13 @@ function RequirementBoard({
           <span>未上线</span>
           <span />
         </div>
-        {projects.map((project) => {
+        {ongoingProjectRows.length ? ongoingProjectRows.map((project) => {
           const total = project.requirements.length;
           const online = project.requirements.filter(
-            (requirement) => requirement.status === "online",
+            (requirement) => releaseStatusOfSummary(requirement) === "online",
           ).length;
           const scheduled = project.requirements.filter(
-            (requirement) => requirement.status === "scheduled",
+            (requirement) => releaseStatusOfSummary(requirement) === "scheduled",
           ).length;
           const offline = total - online - scheduled;
           const ongoing = scheduled > 0 || offline > 0;
@@ -430,7 +436,7 @@ function RequirementBoard({
               <Icon name="chevron" />
             </button>
           );
-        })}
+        }) : <p className="board-project-empty">暂无进行中的项目。</p>}
       </div>
       <BoardOwnerTable rows={ownerRows} />
       <RequirementTimeline onOpenRequirement={onOpenRequirement} refreshKey={projects} />
@@ -438,17 +444,26 @@ function RequirementBoard({
   );
 }
 
+function releaseStatusOfSummary(requirement: Pick<RequirementSummary, "status">): "offline" | "scheduled" | "online" {
+  return requirement.status === "online" || requirement.status === "scheduled" ? requirement.status : "offline";
+}
+
 function currentReleaseDate(requirement: RequirementSummary) {
-  const date = requirement.status === "online"
+  const status = releaseStatusOfSummary(requirement);
+  const date = status === "online"
     ? requirement.releaseDate
-    : requirement.status === "scheduled"
+    : status === "scheduled"
       ? requirement.scheduledFullDate ?? requirement.scheduledGrayDate
       : undefined;
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined;
-  const [year, month, day] = date.split("-").map(Number);
+  const match = date?.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/);
+  if (!match) return undefined;
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
   const parsed = new Date(Date.UTC(year, month - 1, day));
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day
-    ? date
+    ? `${yearText}-${monthText}-${dayText}`
     : undefined;
 }
 
@@ -2187,7 +2202,7 @@ export function RequirementWorkspace({
                             setDifySettingsRequest((current) => current + 1);
                           }}
                         >
-                          Dify 知识库
+                          项目记忆
                         </button>
                         <button
                           role="menuitem"

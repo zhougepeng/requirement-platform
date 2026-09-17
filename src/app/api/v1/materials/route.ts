@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { apiError, apiJson } from "@/lib/api-response";
 import { actorFromRequest, publisherFromRequest } from "@/services/auth/request-actor";
-import { createMaterial, listMaterials } from "@/services/materials/material-service";
+import { createMaterial, listMaterials, type MaterialScope } from "@/services/materials/material-service";
 import { scheduleMaterialKnowledgeSync } from "@/services/materials/material-knowledge-sync-service";
 import { getProject } from "@/services/requirement/repository";
 
@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
-  scope: z.enum(["project", "public"]),
+  scope: z.enum(["project", "public", "pm_skill"]),
   projectId: z.string().trim().min(2).max(80).optional(),
   directoryId: z.string().trim().min(2).max(100).optional(),
   title: z.string().trim().min(1).max(120),
@@ -23,7 +23,8 @@ export async function GET(request: Request) {
   try {
     await actorFromRequest(request);
     const url = new URL(request.url);
-    const scope = url.searchParams.get("scope") === "public" ? "public" : "project";
+    const requestedScope = url.searchParams.get("scope");
+    const scope: MaterialScope = requestedScope === "public" ? "public" : requestedScope === "pm_skill" ? "pm_skill" : "project";
     const projectId = url.searchParams.get("project_id")?.trim() || undefined;
     const directoryId = url.searchParams.get("directory_id")?.trim() || undefined;
     return apiJson(await listMaterials({ scope, projectId, directoryId }));

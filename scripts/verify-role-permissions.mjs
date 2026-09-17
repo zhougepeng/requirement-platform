@@ -10,6 +10,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const port = 3313;
 const baseUrl = `http://127.0.0.1:${port}`;
 const sessionSecret = randomBytes(32).toString("base64url");
+const ssoSecret = randomBytes(32).toString("base64url");
 const dataDir = await mkdtemp(path.join(tmpdir(), "requirement-platform-permissions-"));
 
 function expect(condition, message) {
@@ -20,6 +21,19 @@ function sessionCookie(openId, name) {
   const payload = Buffer.from(JSON.stringify({ openId, name, expiresAt: Date.now() + 60_000 })).toString("base64url");
   const signature = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
   return `requirement_platform_session=${payload}.${signature}`;
+}
+
+function workbenchIntegrationToken(openId, name) {
+  const payload = Buffer.from(JSON.stringify({
+    aud: "requirement-platform-api",
+    source: "product-workbench",
+    jti: randomBytes(18).toString("base64url"),
+    openId,
+    name,
+    expiresAt: Date.now() + 60_000,
+  })).toString("base64url");
+  const signature = createHmac("sha256", ssoSecret).update(payload).digest("base64url");
+  return `wbi_${payload}.${signature}`;
 }
 
 async function request(pathname, openId, options = {}) {
@@ -75,6 +89,7 @@ const server = spawn(process.execPath, ["server.js"], {
     AUTH_COOKIE_SECURE: "false",
     APP_BASE_URL: baseUrl,
     AUTH_SESSION_SECRET: sessionSecret,
+    WORKBUDDY_SSO_SECRET: ssoSecret,
     REQUIREMENT_PLATFORM_DATA_DIR: dataDir,
     REQUIREMENT_PLATFORM_PUBLISHED_DEMO_DIR: path.join(dataDir, "published-demos"),
   },
@@ -111,6 +126,20 @@ try {
   const tokenHeaders = { Authorization: `Bearer ${accessToken}` };
   const tokenProjects = await request("/api/v1/projects", undefined, { headers: tokenHeaders });
   expect(tokenProjects.status === 200, `个人访问令牌无法读取项目列表（HTTP ${tokenProjects.status}）。`);
+
+  const integrationHeaders = { Authorization: `Bearer ${workbenchIntegrationToken("publisher", "publisher")}` };
+  const integrationProjects = await request("/api/v1/projects", undefined, { headers: integrationHeaders });
+  expect(integrationProjects.status === 200, `工作搭子签名凭证无法读取项目列表（HTTP ${integrationProjects.status}）。`);
+  const integrationCreatedProject = await request("/api/v1/projects", undefined, {
+    method: "POST",
+    headers: { ...integrationHeaders, "content-type": "application/json" },
+    body: JSON.stringify({ code: "WBI", name: "工作搭子签名凭证项目", description: "服务间身份回归测试" }),
+  });
+  expect(integrationCreatedProject.status === 201, `工作搭子签名凭证无法创建项目（HTTP ${integrationCreatedProject.status}）。`);
+  const invalidIntegration = await request("/api/v1/projects", undefined, {
+    headers: { Authorization: "Bearer wbi_invalid.signature" },
+  });
+  expect(invalidIntegration.status === 401, `无效工作搭子签名凭证未被拒绝（HTTP ${invalidIntegration.status}）。`);
 
   const createdProject = await request("/api/v1/projects", undefined, {
     method: "POST",
@@ -192,7 +221,7 @@ try {
   const invalidToken = await request("/api/v1/projects", undefined, { headers: { Authorization: "Bearer invalid-workbench-token" } });
   expect(invalidToken.status === 401 || invalidToken.status === 403, `错误个人访问令牌未被拒绝（HTTP ${invalidToken.status}）。`);
 
-  console.log("权限回归测试通过：查看、发布和管理权限均按角色生效；个人访问令牌仅代表真实发布人创建需求，不能访问管理接口，撤销发布权限后立即失效。");
+  console.log("权限回归测试通过：查看、发布和管理权限均按角色生效；个人访问令牌和工作搭子签名凭证均代表真实发布人，不能访问管理接口，撤销发布权限后立即失效。");
 } finally {
   await stopServer();
   await rm(dataDir, { recursive: true, force: true });

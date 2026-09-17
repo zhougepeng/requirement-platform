@@ -352,6 +352,7 @@ export type RequirementTimelineEvent = {
 };
 
 export type RequirementAuditAction =
+  | "login_platform"
   | "view_requirement"
   | "update_release_status"
   | "archive_requirement"

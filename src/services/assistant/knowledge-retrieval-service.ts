@@ -2,7 +2,8 @@ import "server-only";
 
 import type { RequirementActor } from "@/services/auth/request-actor";
 import { listCurrentRequirementKnowledgeSources, listProjects, type CurrentRequirementKnowledgeSource } from "@/services/requirement/repository";
-import { DifyKnowledgeClient, type DifyRetrievedChunk } from "@/services/assistant/dify-knowledge-client";
+import { DifyKnowledgeClient, isDifyKnowledgeConfigured, type DifyRetrievedChunk } from "@/services/assistant/dify-knowledge-client";
+import { HindsightKnowledgeClient, type HindsightRetrievedChunk } from "@/services/assistant/hindsight-knowledge-client";
 import { listKnowledgeSyncEntries, schedulePendingKnowledgeRetry, type KnowledgeContentType } from "@/services/assistant/knowledge-sync-service";
 import { listAllMaterials, type Material } from "@/services/materials/material-service";
 import { listMaterialKnowledgeSyncEntries, schedulePendingMaterialKnowledgeRetry } from "@/services/materials/material-knowledge-sync-service";
@@ -36,7 +37,7 @@ function isFutureQuestion(question: string) {
   return /后面|未来|规划|下一版|下个版本|准备做|待做|尚未上线|未上线(?:的)?(?:需求|功能)?|还没有上线|排期|预计上线/.test(question);
 }
 
-function mergeHits(...groups: DifyRetrievedChunk[][]) {
+function mergeHits(...groups: Array<Array<DifyRetrievedChunk | HindsightRetrievedChunk>>) {
   const seen = new Set<string>();
   const merged: DifyRetrievedChunk[] = [];
   for (const hit of groups.flat()) {
@@ -73,13 +74,30 @@ function resolveScope(input: Input, sources: CurrentRequirementKnowledgeSource[]
   return sources;
 }
 
+function parseRequirementDocumentId(documentId: string) {
+  const prefix = "requirement-platform:";
+  if (!documentId.startsWith(prefix)) return undefined;
+  const parts = documentId.slice(prefix.length).split(":");
+  if (parts.length < 3) return undefined;
+  const contentType = parts.at(-1);
+  if (contentType !== "requirement_summary" && contentType !== "prd" && contentType !== "test_case") return undefined;
+  const projectId = parts[0];
+  const requirementCode = parts.slice(1, -1).join(":");
+  if (!projectId || !requirementCode) return undefined;
+  return { projectId, requirementCode, contentType } as const;
+}
+
 function filterHits(hits: DifyRetrievedChunk[], sources: CurrentRequirementKnowledgeSource[], entries: Awaited<ReturnType<typeof listKnowledgeSyncEntries>>, statuses: ReadonlySet<RetrievedKnowledgeSource["status"]>) {
   const sourceByCode = new Map(sources.map((source) => [source.requirementCode, source]));
   const byDocumentId = new Map(entries.flatMap((entry) => entry.documentId ? [[entry.documentId, entry] as const] : []));
   const visible = new Map<string, RetrievedKnowledgeSource>();
   const chunks: RetrievedKnowledgeChunk[] = [];
   for (const hit of hits) {
-    const entry = byDocumentId.get(hit.documentId);
+    // The sync index is local runtime state. A deployment can point at the
+    // same Hindsight bank before that index has been restored, so recover the
+    // deterministic identity embedded in our document ID instead of dropping
+    // an otherwise valid, permission-filtered hit.
+    const entry = byDocumentId.get(hit.documentId) ?? parseRequirementDocumentId(hit.documentId);
     if (!entry) continue;
     const source = sourceByCode.get(entry.requirementCode);
     if (!source || source.projectId !== entry.projectId || !statuses.has(source.status)) continue;
@@ -93,7 +111,7 @@ function materialSource(material: Material, documentId: string, projectNames: Ma
   return {
     id: documentId,
     projectId: material.projectId ?? "public",
-    projectName: material.projectId ? projectNames.get(material.projectId) ?? "已删除项目" : "公共资料",
+    projectName: material.scope === "pm_skill" ? "产品经理经验库" : material.projectId ? projectNames.get(material.projectId) ?? "已删除项目" : "公共资料",
     requirementCode: material.id,
     requirementName: material.title,
     versionNo: 0,
@@ -116,7 +134,9 @@ function filterMaterialHits(hits: DifyRetrievedChunk[], materials: Material[], e
       const onlineCodes = new Set(requirementSources.filter((source) => source.status === "online").map((source) => source.requirementCode));
       if (!material.sourceRequirementCodes.some((code) => onlineCodes.has(code))) continue;
     }
+    // 产品经理经验跟人走，和公共资料一样对所有检索范围可见。
     const visibleInScope = material.scope === "public"
+      || material.scope === "pm_skill"
       || input.scope === "all-published"
       || (input.scope === "current-project" && material.projectId === input.projectId)
       || (input.scope === "current-requirement" && material.projectId === input.projectId);
@@ -145,18 +165,19 @@ export async function retrieveProductKnowledge(input: Input): Promise<KnowledgeR
   ]);
   const scopedSources = resolveScope(input, allRequirementSources);
   const mode: KnowledgeQuestionMode = isFutureQuestion(input.question) ? "future" : "current";
-  const client = new DifyKnowledgeClient();
+  const hindsightClient = new HindsightKnowledgeClient();
   const [entries, primaryHits, planningHits] = await Promise.all([
     listKnowledgeSyncEntries(),
-    client.retrieve(input.question),
-    mode === "future" ? Promise.resolve([]) : client.retrieve(`${input.question}\n\n同时检索相关的已排期、未上线和规划需求。`),
+    hindsightClient.retrieve(input.question),
+    mode === "future" ? Promise.resolve([]) : hindsightClient.retrieve(`${input.question}\n\n同时检索相关的已排期和已上线需求。`),
   ]);
   const hits = mergeHits(primaryHits, planningHits);
   if (mode === "future") return { mode, usedOfflineFallback: false, ...filterHits(hits, scopedSources, entries, new Set(["scheduled", "offline"])) };
 
   // 普通查询也要能提示相关规划，但“当前已支持”的判断只由回答层依据已上线来源给出。
   const requirementMatched = filterHits(hits, scopedSources, entries, new Set(["online", "scheduled", "offline"]));
-  const materialMatched = filterMaterialHits(hits, materials, materialEntries, input, new Map(projects.map((project) => [project.id, project.name])), allRequirementSources);
+  const materialHits = isDifyKnowledgeConfigured() ? await new DifyKnowledgeClient().retrieve(input.question) : [];
+  const materialMatched = filterMaterialHits(materialHits, materials, materialEntries, input, new Map(projects.map((project) => [project.id, project.name])), allRequirementSources);
   const matched = {
     chunks: limitChunks([...requirementMatched.chunks, ...materialMatched.chunks]),
     sources: [...requirementMatched.sources, ...materialMatched.sources],

@@ -58,7 +58,8 @@ function metadata(material: Material): DifyKnowledgeMetadata {
 function documentText(material: Material) {
   return [
     `资料名称：${material.title}`,
-    `资料范围：${material.scope === "project" ? "项目资料" : "公共资料"}`,
+    `资料范围：${material.scope === "project" ? "项目资料" : material.scope === "pm_skill" ? "产品经理经验库" : "公共资料"}`,
+    material.scope === "pm_skill" ? "内容性质：产品经理的工作流程与经验（是“怎么做”，不是产品规范；产品规范请以产品规范库为准）" : "",
     material.projectId ? `项目 ID：${material.projectId}` : "",
     `来源：${material.origin === "system_generated" ? "系统根据已上线需求自动整理" : "人工维护"}`,
     material.sourceRequirementCodes.length ? `来源需求：${material.sourceRequirementCodes.join("、")}` : "",

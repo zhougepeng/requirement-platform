@@ -7,6 +7,7 @@ import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
 import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecEntry, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementAuditAction, RequirementAuditLog, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementRuntime, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
 import { normalizeWorkbuddyUrl } from "@/lib/workbuddy-url";
+import { getPmSkillPlaybook } from "@/services/materials/material-service";
 
 const ROOT = process.cwd();
 const DATA_DIR = process.env.REQUIREMENT_PLATFORM_DATA_DIR
@@ -26,6 +27,7 @@ const MAX_SNAPSHOT_FILES = 500;
 const SNAPSHOT_PATCH_ENTRY = "__requirement-platform-patch__.json";
 
 export const REQUIREMENT_AUDIT_ACTION_LABELS: Record<RequirementAuditAction, string> = {
+  login_platform: "登录需求库",
   view_requirement: "查看需求",
   update_release_status: "更新上线状态",
   archive_requirement: "作废需求",
@@ -42,7 +44,7 @@ export const REQUIREMENT_AUDIT_ACTION_LABELS: Record<RequirementAuditAction, str
 };
 
 export type RequirementAuditInput = {
-  requirementCode: string;
+  requirementCode?: string;
   action: RequirementAuditAction;
   actor?: { id: string; name: string };
   detail?: string;
@@ -466,17 +468,17 @@ function auditActor(actor?: { id: string; name: string }) {
 }
 
 function appendAuditLog(store: RequirementStore, input: RequirementAuditInput) {
-  const requirement = store.requirements.find((item) => item.code === input.requirementCode);
-  if (!requirement) throw new Error("需求不存在。");
-  const project = store.projects.find((item) => item.id === requirement.projectId);
-  if (!project) throw new Error("需求所属项目不存在。");
+  const requirement = input.requirementCode ? store.requirements.find((item) => item.code === input.requirementCode) : undefined;
+  if (!requirement && input.action !== "login_platform") throw new Error("需求不存在。");
+  const project = requirement ? store.projects.find((item) => item.id === requirement.projectId) : undefined;
+  if (requirement && !project) throw new Error("需求所属项目不存在。");
   const actor = auditActor(input.actor);
   const entry: RequirementAuditLog = {
     id: `audit_${randomUUID().replaceAll("-", "")}`,
-    requirementCode: requirement.code,
-    requirementTitle: requirement.title,
-    projectId: project.id,
-    projectName: project.name,
+    requirementCode: requirement?.code ?? "",
+    requirementTitle: requirement?.title ?? "需求库",
+    projectId: project?.id ?? "platform",
+    projectName: project?.name ?? "需求库",
     actorId: actor.id,
     actorName: actor.name,
     action: input.action,
@@ -500,6 +502,7 @@ export type RequirementAuditFilters = {
   action?: RequirementAuditAction;
   from?: string;
   to?: string;
+  cursor?: string;
   limit?: number;
 };
 
@@ -509,14 +512,20 @@ export async function listRequirementAuditLogs(filters: RequirementAuditFilters 
   const to = filters.to?.trim() ? `${filters.to.trim()} 23:59` : undefined;
   const actorName = filters.actorName?.trim().toLowerCase();
   const limit = Math.min(Math.max(filters.limit ?? 500, 1), 500);
-  return clone((store.auditLogs ?? [])
+  const filtered = (store.auditLogs ?? [])
     .filter((item) => !filters.requirementCode || item.requirementCode === filters.requirementCode)
     .filter((item) => !actorName || item.actorName.toLowerCase().includes(actorName))
     .filter((item) => !filters.action || item.action === filters.action)
     .filter((item) => !from || item.createdAt >= from)
     .filter((item) => !to || item.createdAt <= to)
-    .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt))
-    .slice(0, limit));
+    .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+  const cursorIndex = filters.cursor?.trim() ? filtered.findIndex((item) => item.id === filters.cursor?.trim()) : -1;
+  const startAt = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+  const items = filtered.slice(startAt, startAt + limit);
+  return clone({
+    items,
+    nextCursor: startAt + limit < filtered.length ? items.at(-1)?.id : undefined,
+  });
 }
 
 function archived(value: { archivedAt?: string }) {
@@ -757,7 +766,7 @@ export async function getGenerationContext(input: { requirementId?: string; requ
     ? store.requirements.find((item) => item.id === input.requirementId || item.code === input.requirementId || item.code === input.requirementCode)
     : undefined;
   const productId = input.productId || requirement?.productId || "";
-  const [globalSpec, productSpec] = await Promise.all([getGlobalSpec(), productId ? getProductSpec(productId) : Promise.resolve(emptyProductSpec(""))]);
+  const [globalSpec, productSpec, pmPlaybook] = await Promise.all([getGlobalSpec(), productId ? getProductSpec(productId) : Promise.resolve(emptyProductSpec("")), getPmSkillPlaybook()]);
   const projectId = input.projectId || requirement?.projectId || "";
   const currentVersion = requirement ? store.versions.find((item) => item.id === requirement.currentVersionId) : undefined;
   return clone({
@@ -766,6 +775,8 @@ export async function getGenerationContext(input: { requirementId?: string; requ
     requirementContext: requirement ? { id: requirement.id, code: requirement.code, title: requirement.title, projectId, productId, versionNo: currentVersion?.number, prd: currentVersion?.prd ?? "" } : { projectId, productId },
     effectiveSpecVersions: { global: globalSpec.version, product: productId ? productSpec.version : null },
     componentLibrary: productComponentLibrary(globalSpec, productSpec),
+    // 产品经理经验库跟人走，不是产品规范：只作为“怎么做”的经验进入提示词，没有内容时为空数组。
+    pmPlaybook,
     type: input.type ?? "demo",
   });
 }
@@ -1320,7 +1331,7 @@ export async function searchRequirements(query: string) {
 
 /**
  * Latest effective product knowledge only. This is deliberately separate from
- * the legacy local retrieval helpers below: Dify is the assistant's only
+ * the legacy local retrieval helpers below: the configured Hindsight memory is the assistant's only
  * product-knowledge retriever, while this function is the platform fact source
  * used for synchronization and post-retrieval permission checks.
  */
