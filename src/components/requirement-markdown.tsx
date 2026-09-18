@@ -113,18 +113,30 @@ function renderFlowchartFallback(source: string) {
   }
 
   if (!nodes.size) return "";
-  const levels = new Map<string, number>([...nodes.keys()].map((id) => [id, 0]));
-  for (let round = 0; round < nodes.size; round += 1) {
-    let changed = false;
-    for (const edge of edges) {
-      const next = Math.min(nodes.size - 1, (levels.get(edge.from) || 0) + 1);
-      if (next > (levels.get(edge.to) || 0)) {
-        levels.set(edge.to, next);
-        changed = true;
+  // Use breadth-first layering. Inventory exception paths may point back to
+  // an earlier step, so longest-path layering would keep moving nodes upward.
+  const adjacency = new Map<string, string[]>();
+  const incoming = new Map<string, number>([...nodes.keys()].map((id) => [id, 0]));
+  for (const edge of edges) {
+    adjacency.set(edge.from, [...(adjacency.get(edge.from) || []), edge.to]);
+    incoming.set(edge.to, (incoming.get(edge.to) || 0) + 1);
+  }
+  const levels = new Map<string, number>();
+  const queue: string[] = [...nodes.keys()].filter((id) => (incoming.get(id) || 0) === 0);
+  if (!queue.length) queue.push(nodes.keys().next().value as string);
+  const queued = new Set(queue);
+  while (queue.length) {
+    const from = queue.shift() as string;
+    const fromLevel = levels.get(from) || 0;
+    for (const to of adjacency.get(from) || []) {
+      if (!levels.has(to)) levels.set(to, fromLevel + 1);
+      if (!queued.has(to)) {
+        queued.add(to);
+        queue.push(to);
       }
     }
-    if (!changed) break;
   }
+  for (const id of nodes.keys()) if (!levels.has(id)) levels.set(id, Math.max(0, ...levels.values()) + 1);
   const groups = new Map<number, string[]>();
   for (const id of nodes.keys()) {
     const level = levels.get(id) || 0;
@@ -173,7 +185,7 @@ function renderFlowchartFallback(source: string) {
     // Use the rendered distance as a second guard. A direct edge can make
     // the level numbers look adjacent even when another branch sits between
     // the two nodes vertically.
-    const isLongEdge = toLevel - fromLevel > 1 || endY - startY > 160;
+    const isLongEdge = toLevel - fromLevel !== 1 || endY - startY > 160;
     // Long convergence edges must travel around the intermediate branch
     // instead of cutting through another decision diamond. Exception edges
     // get independent lanes, otherwise the four "异常/超时" paths collapse
