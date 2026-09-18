@@ -265,6 +265,7 @@ export type ProductSpecEntry = {
   description: string;
   structuredData: Record<string, unknown>;
   sourceRequirementId?: string;
+  sourceVersionNo?: number;
   sourceProductId?: string;
   level: SpecLevel;
   evidence?: ProductSpecEvidence[];
@@ -347,6 +348,11 @@ export type ProductSpec = {
   /** Structured rules are the executable form. Legacy fields remain for compatibility. */
   entries?: ProductSpecEntry[];
   scope?: SpecScope;
+  lastExtraction?: {
+    requirementCode: string;
+    versionNo: number;
+    sourceHash?: string;
+  };
   updatedAt: string;
   updatedBy?: string;
 };

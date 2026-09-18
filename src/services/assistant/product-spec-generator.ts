@@ -226,7 +226,7 @@ function components(value: unknown, requirementCode: string, fallback: ProductSp
 
 const categories = new Set<ProductSpecEntry["category"]>(["prd", "token", "component", "layout", "interaction", "template", "demo", "terminology", "business_rule"]);
 const levels = new Set<ProductSpecEntry["level"]>(["must", "should", "forbid"]);
-function entries(value: unknown, requirementCode: string, productId: string, fallback: ProductSpecEntry[]) {
+function entries(value: unknown, requirementCode: string, productId: string, versionNo: number, fallback: ProductSpecEntry[]) {
   if (!Array.isArray(value)) return fallback;
   return value.flatMap((entry, index) => {
     const item = record(entry);
@@ -242,11 +242,11 @@ function entries(value: unknown, requirementCode: string, productId: string, fal
       if (!source || typeof source.sourceType !== "string") return [];
       return [{ sourceType: ["prd", "demo_html", "css", "dom", "test"].includes(source.sourceType) ? source.sourceType as ProductSpecEvidence["sourceType"] : "demo_html", path: typeof source.path === "string" ? source.path.slice(0, 500) : undefined, selector: typeof source.selector === "string" ? source.selector.slice(0, 300) : undefined, excerpt: typeof source.excerpt === "string" ? source.excerpt.slice(0, 800) : undefined }];
     }).slice(0, 8) : [];
-    return [{ id: typeof item.id === "string" ? item.id.slice(0, 120) : `entry_${requirementCode}_${index}`, category, scope, productId: scope === "product" ? productId : undefined, title, description, structuredData: record(item.structuredData) ?? {}, sourceRequirementId: requirementCode, sourceProductId: scope === "product" ? productId : undefined, level, evidence, confidence: typeof item.confidence === "number" ? Math.max(0, Math.min(1, item.confidence)) : undefined } satisfies ProductSpecEntry];
+    return [{ id: typeof item.id === "string" ? item.id.slice(0, 120) : `entry_${requirementCode}_${index}`, category, scope, productId: scope === "product" ? productId : undefined, title, description, structuredData: record(item.structuredData) ?? {}, sourceRequirementId: requirementCode, sourceVersionNo: versionNo, sourceProductId: scope === "product" ? productId : undefined, level, evidence, confidence: typeof item.confidence === "number" ? Math.max(0, Math.min(1, item.confidence)) : undefined } satisfies ProductSpecEntry];
   }).slice(0, 120);
 }
 
-function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode: string, demoHtml = ""): ProductSpec {
+function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode: string, versionNo: number, demoHtml = ""): ProductSpec {
   const source = record(value.spec) ?? value;
   const rules = record(source.rules);
   const prd = record(source.prd);
@@ -256,7 +256,7 @@ function normalizeSpec(value: JsonRecord, program: ProductSpec, requirementCode:
   const inferredComponents = inferDemoComponents(demoHtml, requirementCode);
   const parsedTokens = tokens && Object.keys(tokens).length ? tokens : inferredTokens;
   const parsedComponents = components(source.components, requirementCode, inferredComponents.length ? inferredComponents : program.components);
-  const parsedEntries = entries(source.entries, requirementCode, program.productId, program.entries ?? []);
+  const parsedEntries = entries(source.entries, requirementCode, program.productId, versionNo, program.entries ?? []);
   return {
     id: program.id,
     productId: program.productId,
@@ -408,5 +408,5 @@ ${JSON.stringify(compactTestCases(context.testCases))}`;
     if (error instanceof ProductSpecModelError) throw error;
     throw new ProductSpecModelError(error instanceof Error ? error.message : "AI 规范解析失败。", 422);
   }
-  return extractProductSpec(requirementCode, productId, normalizeSpec(parsed, context.programSpec, requirementCode, context.demoHtml));
+  return extractProductSpec(requirementCode, productId, normalizeSpec(parsed, context.programSpec, requirementCode, context.version.number, context.demoHtml));
 }

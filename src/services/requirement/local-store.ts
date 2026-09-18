@@ -887,8 +887,13 @@ async function analyseProductSpec(requirementCode: string, productId: string): P
 
 function compareProductSpec(existing: ProductSpec, incoming: ProductSpec): ProductSpecChange[] {
   const changes: ProductSpecChange[] = [];
+  const comparableText = (value: string) => value.replace(/\s+/g, "").trim();
+  const sameSource = existing.lastExtraction?.requirementCode === incoming.lastExtraction?.requirementCode
+    && existing.lastExtraction?.versionNo === incoming.lastExtraction?.versionNo;
+  const compareStructuredEntries = Boolean(sameSource && existing.entries?.length && incoming.entries?.length);
   const compareList = (path: string, oldValues: string[], newValues: string[]) => {
-    for (const value of newValues) if (!oldValues.includes(value)) changes.push({ category: oldValues.length ? "supplemented" : "added", path, summary: value, existing: oldValues, incoming: newValues });
+    const oldSet = new Set(oldValues.map(comparableText));
+    for (const value of newValues) if (!compareStructuredEntries && !oldSet.has(comparableText(value))) changes.push({ category: oldValues.length ? "supplemented" : "added", path, summary: value, existing: oldValues, incoming: newValues });
   };
   compareList("rules.terminology", existing.rules.terminology, incoming.rules.terminology);
   compareList("rules.businessConstraints", existing.rules.businessConstraints, incoming.rules.businessConstraints);
@@ -898,11 +903,16 @@ function compareProductSpec(existing: ProductSpec, incoming: ProductSpec): Produ
   for (const component of incoming.components) if (!existing.components.some((item) => item.name === component.name)) changes.push({ category: "added", path: `components.${component.name}`, summary: `新增可复用组件：${component.name}`, incoming: component });
   const oldEntries = normalizedEntries(existing);
   const oldByKey = new Map(oldEntries.map((entry) => [`${entry.scope}:${entry.category}:${entry.title}`, entry]));
+  const sameExtraction = (entry: ProductSpecEntry) => Boolean(
+    entry.sourceRequirementId &&
+    entry.sourceRequirementId === incoming.lastExtraction?.requirementCode &&
+    entry.sourceVersionNo === incoming.lastExtraction?.versionNo
+  );
   for (const entry of normalizedEntries(incoming)) {
     const key = `${entry.scope}:${entry.category}:${entry.title}`;
     const previous = oldByKey.get(key);
     if (!previous) changes.push({ category: "added", scope: entry.scope, productId: entry.productId, path: `entries.${entry.category}.${entry.title}`, summary: entry.description, incoming: entry });
-    else if (previous.description !== entry.description || JSON.stringify(previous.structuredData) !== JSON.stringify(entry.structuredData)) changes.push({ category: entry.level === "forbid" || previous.level === "forbid" ? "conflict" : "supplemented", scope: entry.scope, productId: entry.productId, path: `entries.${entry.category}.${entry.title}`, summary: entry.description, existing: previous, incoming: entry });
+    else if (!sameExtraction(previous) && (previous.description !== entry.description || JSON.stringify(previous.structuredData) !== JSON.stringify(entry.structuredData))) changes.push({ category: entry.level === "forbid" || previous.level === "forbid" ? "conflict" : "supplemented", scope: entry.scope, productId: entry.productId, path: `entries.${entry.category}.${entry.title}`, summary: entry.description, existing: previous, incoming: entry });
   }
   return changes;
 }
@@ -917,8 +927,23 @@ export async function extractProductSpec(requirementCode: string, productId: str
     throw new Error(`产品规范提取前置条件未满足。${failedChecks.length ? ` ${failedChecks.join("；")}` : ""}`);
   }
   await getProduct(productId);
+  const version = store.versions.find((item) => item.id === requirement.currentVersionId);
+  if (!version) throw new Error("需求版本不存在。");
   const existing = (store.productSpecs ?? []).find((item) => item.productId === productId) ?? emptyProductSpec(productId);
-  const draftSpec = analysedDraftSpec ?? await analyseProductSpec(requirementCode, productId);
+  const analysed = analysedDraftSpec ?? await analyseProductSpec(requirementCode, productId);
+  const draftSpec: ProductSpec = {
+    ...analysed,
+    lastExtraction: {
+      requirementCode,
+      versionNo: version.number,
+      sourceHash: analysed.demoBaseline?.sourceHash,
+    },
+    entries: normalizedEntries(analysed, requirementCode).map((entry) => ({
+      ...entry,
+      sourceRequirementId: requirementCode,
+      sourceVersionNo: version.number,
+    })),
+  };
   const changes = compareProductSpec(existing, draftSpec);
   return clone({ product: (store.products ?? []).find((item) => item.id === productId), requirement, changes, draftSpec, summary: { total: changes.length, added: changes.filter((item) => item.category === "added").length, supplemented: changes.filter((item) => item.category === "supplemented").length, conflicts: changes.filter((item) => item.category === "conflict").length } });
 }
@@ -1074,7 +1099,10 @@ export async function mergeProductSpec(productId: string, draftSpec: ProductSpec
       for (const item of right) {
         const normalized = { ...item, scope, productId: scope === "product" ? targetProductId : undefined, sourceProductId: scope === "product" ? targetProductId : undefined };
         const key = `${normalized.category}:${normalized.title}`;
-        byKey.set(key, { ...byKey.get(key), ...normalized, structuredData: { ...byKey.get(key)?.structuredData, ...normalized.structuredData }, evidence: [...(byKey.get(key)?.evidence ?? []), ...(normalized.evidence ?? [])].slice(-8) });
+        const previous = byKey.get(key);
+        const evidence = Array.from(new Map([...previous?.evidence ?? [], ...normalized.evidence ?? []].map((item) => [JSON.stringify(item), item])).values()).slice(-8);
+        const sameSource = Boolean(previous?.sourceRequirementId && previous.sourceRequirementId === normalized.sourceRequirementId && previous.sourceVersionNo === normalized.sourceVersionNo);
+        byKey.set(key, { ...previous, ...normalized, ...(sameSource && previous ? { description: previous.description, structuredData: previous.structuredData } : { structuredData: { ...previous?.structuredData, ...normalized.structuredData } }), evidence });
       }
       return Array.from(byKey.values());
     };
@@ -1099,23 +1127,28 @@ export async function mergeProductSpec(productId: string, draftSpec: ProductSpec
       updatedAt: timestamp,
       updatedBy: actor?.name,
     });
+    const contentKey = (spec: ProductSpec) => {
+      return JSON.stringify(spec, (key, value) => ["version", "updatedAt", "updatedBy"].includes(key) ? undefined : value);
+    };
     const base = current ?? emptyProductSpec(productId);
     const incomingProduct = { ...draftSpec, productId, scope: "product" as const };
     const saved = mergeSpec(base, incomingProduct, "product", productId);
     store.productSpecs ??= [];
     store.productSpecSnapshots ??= [];
-    if (current) store.productSpecSnapshots.push({ ...clone(current), snapshotId: `product_spec_snapshot_${randomUUID().replaceAll("-", "")}`, createdAt: timestamp, createdBy: actor?.name });
-    if (current) Object.assign(current, saved); else store.productSpecs.push(saved);
+    const productChanged = !current || contentKey(current) !== contentKey(saved);
+    if (current && productChanged) store.productSpecSnapshots.push({ ...clone(current), snapshotId: `product_spec_snapshot_${randomUUID().replaceAll("-", "")}`, createdAt: timestamp, createdBy: actor?.name });
+    if (current && productChanged) Object.assign(current, saved); else if (!current) store.productSpecs.push(saved);
     const globalEntries = normalizedEntries(draftSpec).filter((entry) => entry.scope === "global");
     if (globalEntries.length) {
       const globalBase = store.globalSpec ?? emptyGlobalSpec();
       const globalDraft = { ...emptyGlobalSpec(), entries: globalEntries, rules: { terminology: [], businessConstraints: [], copywriting: [] }, prd: { structure: [], writingRules: [] }, tokens: {}, components: [], demo: { layoutPrinciples: [], componentReuseRules: [], interactionRequirements: [], constraints: [] } };
       const globalSaved = mergeSpec(globalBase, globalDraft, "global", "");
       store.globalSpecSnapshots ??= [];
-      if (store.globalSpec) store.globalSpecSnapshots.push({ ...clone(store.globalSpec), snapshotId: `global_spec_snapshot_${randomUUID().replaceAll("-", "")}`, createdAt: timestamp, createdBy: actor?.name });
-      store.globalSpec = globalSaved;
+      const globalChanged = !store.globalSpec || contentKey(store.globalSpec) !== contentKey(globalSaved);
+      if (store.globalSpec && globalChanged) store.globalSpecSnapshots.push({ ...clone(store.globalSpec), snapshotId: `global_spec_snapshot_${randomUUID().replaceAll("-", "")}`, createdAt: timestamp, createdBy: actor?.name });
+      if (globalChanged) store.globalSpec = globalSaved;
     }
-    return clone(saved);
+    return clone(current && !productChanged ? current : saved);
   });
 }
 
