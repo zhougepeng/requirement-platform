@@ -2,16 +2,14 @@
 
 import { memo, useEffect, useId, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
-import mermaid from "mermaid";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PrdCommentAnchor, RequirementComment } from "@/lib/types";
 import { Icon } from "@/components/icons";
 
 let mermaidSequence = 0;
-const fallbackFlowchartSources = new Set<string>();
-
-mermaid.initialize({
+let mermaidLoadPromise: Promise<typeof import("mermaid").default> | null = null;
+const mermaidConfig = {
   startOnLoad: false,
   securityLevel: "strict",
   theme: "base",
@@ -23,7 +21,17 @@ mermaid.initialize({
     secondaryColor: "#f8fafc",
     tertiaryColor: "#ffffff",
   },
-});
+} as const;
+
+function loadMermaid() {
+  if (!mermaidLoadPromise) {
+    mermaidLoadPromise = import("mermaid").then(({ default: loadedMermaid }) => {
+      loadedMermaid.initialize(mermaidConfig);
+      return loadedMermaid;
+    });
+  }
+  return mermaidLoadPromise;
+}
 
 function normalizeMermaidSource(source: string) {
   return source.replace(/\r\n/g, "\n").replace(
@@ -301,33 +309,29 @@ function DiagramViewport({ svg, className = "", isFocused = false, onFullscreenC
 const MermaidDiagram = memo(function MermaidDiagram({ source, isFocused = false, onFullscreenChange }: { source: string; isFocused?: boolean; onFullscreenChange?: (value: boolean) => void }) {
   const reactId = useId();
   const isFlowchart = /^\s*(?:flowchart|graph)\s+/m.test(source);
-  const [svg, setSvg] = useState("");
-  const [failed, setFailed] = useState(false);
-  const [showFallback, setShowFallback] = useState(() => isFlowchart || fallbackFlowchartSources.has(source));
+  const [renderState, setRenderState] = useState({ source, svg: "", failed: false, showFallback: false });
 
   useEffect(() => {
-    if (isFlowchart) return;
     let active = true;
     const id = `requirement-mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}-${mermaidSequence++}`;
     const timeout = window.setTimeout(() => {
       if (!active) return;
-      fallbackFlowchartSources.add(source);
-      setShowFallback(true);
-    }, 1800);
-    void mermaid
-      .render(id, normalizeMermaidSource(source))
+      // Mermaid 11's flowchart layout can hang in some Next development
+      // environments. Keep the real Mermaid renderer as the primary path,
+      // and use the local renderer only when it does not return in time.
+      setRenderState({ source, svg: "", failed: !isFlowchart, showFallback: isFlowchart });
+    }, 5000);
+    void loadMermaid()
+      .then((loadedMermaid) => loadedMermaid.render(id, normalizeMermaidSource(source)))
       .then(({ svg: nextSvg }) => {
-        if (active) {
-          window.clearTimeout(timeout);
-          setSvg(nextSvg);
-          setShowFallback(false);
-        }
+        if (!active) return;
+        window.clearTimeout(timeout);
+        setRenderState({ source, svg: nextSvg, failed: false, showFallback: false });
       })
       .catch(() => {
-        if (active) {
-          window.clearTimeout(timeout);
-          setFailed(true);
-        }
+        if (!active) return;
+        window.clearTimeout(timeout);
+        setRenderState({ source, svg: "", failed: !isFlowchart, showFallback: isFlowchart });
       });
     return () => {
       active = false;
@@ -335,11 +339,10 @@ const MermaidDiagram = memo(function MermaidDiagram({ source, isFocused = false,
     };
   }, [isFlowchart, reactId, source]);
 
-  if (failed) return <div className="mermaid-diagram is-failed"><p>流程图语法无法渲染，保留原始内容供检查。</p><pre><code>{source}</code></pre></div>;
-  // Mermaid 11 的异步布局模块在当前 Next 开发环境中可能永远不返回；流程图直接使用本地 SVG 渲染，避免切换 PRD 后长期停在加载态。
-  if (showFallback || isFlowchart) return <FlowchartFallback source={source} isFocused={isFocused} onFullscreenChange={onFullscreenChange} />;
-  if (!svg) return <div className="mermaid-diagram is-loading" aria-busy="true">正在渲染流程图…</div>;
-  return <DiagramViewport svg={svg} isFocused={isFocused} onFullscreenChange={onFullscreenChange} />;
+  if (renderState.source === source && renderState.failed) return <div className="mermaid-diagram is-failed"><p>流程图语法无法渲染，保留原始内容供检查。</p><pre><code>{source}</code></pre></div>;
+  if (renderState.source === source && renderState.showFallback) return <FlowchartFallback source={source} isFocused={isFocused} onFullscreenChange={onFullscreenChange} />;
+  if (renderState.source !== source || !renderState.svg) return <div className="mermaid-diagram is-loading" aria-busy="true">正在渲染流程图…</div>;
+  return <DiagramViewport svg={renderState.svg} isFocused={isFocused} onFullscreenChange={onFullscreenChange} />;
 });
 
 function resolveImageUrl(source: string, demoEntryUrl: string, assetBaseUrl?: string) {
