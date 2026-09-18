@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import AdmZip from "adm-zip";
 import { createInitialStore } from "@/lib/seed";
-import type { DemoArtifact, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecEntry, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementAuditAction, RequirementAuditLog, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementRuntime, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
+import type { DemoArtifact, DemoBaseline, DemoBaselineValidation, HtmlCommentAnchor, PrdCommentAnchor, Product, ProductSpec, ProductSpecChange, ProductSpecEntry, ProductSpecExtractionPreflight, ProductSpecPendingExtraction, Project, Requirement, RequirementAssetFile, RequirementAssetManifest, RequirementAuditAction, RequirementAuditLog, RequirementComment, RequirementDetail, RequirementDetailSummary, RequirementDiscussion, RequirementDocument, RequirementGap, RequirementRuntime, RequirementStore, RequirementTestCase, RequirementTestStatus, RequirementTimelineEvent, RequirementVersion, RequirementVersionSummary } from "@/lib/types";
 import { normalizeWorkbuddyUrl } from "@/lib/workbuddy-url";
 import { getPmSkillPlaybook } from "@/services/materials/material-service";
 
@@ -757,7 +757,8 @@ function productComponentLibrary(globalSpec: ProductSpec, productSpec: ProductSp
 
 export async function getProductGenerationContext(productId: string) {
   const [spec, globalSpec] = await Promise.all([getProductSpec(productId), getGlobalSpec()]);
-  return clone({ productId, globalSpec, productSpec: spec, rules: spec.rules, prd: spec.prd, tokens: spec.tokens, components: spec.components, demo: spec.demo, componentLibrary: productComponentLibrary(globalSpec, spec) });
+  const demoBaseline = spec.demoBaseline;
+  return clone({ productId, globalSpec, productSpec: spec, rules: spec.rules, prd: spec.prd, tokens: spec.tokens, components: spec.components, demo: spec.demo, demoBaseline, generationContract: demoBaseline ? baselineGenerationContract(demoBaseline) : undefined, componentLibrary: productComponentLibrary(globalSpec, spec) });
 }
 
 export type GenerationContextType = "prd_create" | "prd_update" | "demo_create" | "demo_update";
@@ -777,11 +778,14 @@ export async function getGenerationContext(input: { requirementId?: string; requ
   ]);
   const projectId = input.projectId || requirement?.projectId || "";
   const currentVersion = requirement ? store.versions.find((item) => item.id === requirement.currentVersionId) : undefined;
+  const demoBaseline = productId ? productSpec.demoBaseline : undefined;
   return clone({
     globalSpec,
     productSpec: productId ? productSpec : null,
     requirementContext: requirement ? { id: requirement.id, code: requirement.code, title: requirement.title, projectId, productId, versionNo: currentVersion?.number, prd: currentVersion?.prd ?? "" } : { projectId, productId },
     effectiveSpecVersions: { global: globalSpec.version, product: productId ? productSpec.version : null },
+    demoBaseline,
+    generationContract: demoBaseline ? baselineGenerationContract(demoBaseline) : undefined,
     componentLibrary: productComponentLibrary(globalSpec, productSpec),
     // 产品经理经验库只用于新建 PRD / Demo；更新现有产物时从数据层直接排除。
     pmPlaybook,
@@ -790,6 +794,49 @@ export async function getGenerationContext(input: { requirementId?: string; requ
 }
 
 function unique(values: string[]) { return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).slice(0, 80); }
+
+function demoAttributeValues(html: string, attribute: "data-demo-page" | "data-demo-id" | "data-demo-fragment") {
+  const expression = new RegExp('\\b' + attribute + '\\s*=\\s*["\']([^"\']+)["\']', "gi");
+  return Array.from(new Set(Array.from(html.matchAll(expression), (match) => match[1].trim()).filter(Boolean)));
+}
+
+function baselineGenerationContract(baseline: DemoBaseline) {
+  return {
+    mode: baseline.mode,
+    requiredDemoIds: baseline.requiredDemoIds,
+    rules: [
+      "必须基于原始 Demo 页面壳扩展，不得重新设计已有页面。",
+      "必须保留 requiredDemoIds；无法保留时必须提供一对一映射和原因。",
+      "只允许在新需求对应的区域追加内容，不得删除既有基线交互。",
+      "生成后必须调用 Demo 基线校验接口并处理失败项。",
+    ],
+  };
+}
+
+async function buildDemoBaseline(requirement: Requirement, version: RequirementVersion): Promise<DemoBaseline> {
+  if (!version.demoEntryUrl) throw new Error("当前版本缺少原始 Demo 入口，无法建立页面基线。");
+  const html = await readDemoSourceFull(version.demoEntryUrl);
+  if (!html) throw new Error("原始 Demo 无法从已发布工件读取，无法建立页面基线。");
+  const pageIds = demoAttributeValues(html, "data-demo-page");
+  const demoIds = demoAttributeValues(html, "data-demo-id");
+  const fragmentIds = demoAttributeValues(html, "data-demo-fragment");
+  if (!pageIds.length && !demoIds.length) throw new Error("原始 Demo 缺少 data-demo-page 和 data-demo-id，无法作为可校验基线。");
+  const requiredDemoIds = demoIds.filter((id) => /^(nav\.tab\.|purchase\.|demo\.action\.)/.test(id));
+  return {
+    mode: "baseline_extension",
+    sourceRequirementCode: requirement.code,
+    sourceVersionNo: version.number,
+    entryUrl: version.demoEntryUrl,
+    entryPath: version.demoEntryUrl.replace(/^\//, ""),
+    sourceHash: createHash("sha256").update(html).digest("hex"),
+    sourceSize: Buffer.byteLength(html, "utf8"),
+    pageIds,
+    demoIds,
+    fragmentIds,
+    requiredDemoIds: requiredDemoIds.length ? requiredDemoIds : demoIds,
+    capturedAt: now(),
+  };
+}
 
 function legacyEntries(spec: ProductSpec, sourceRequirementId = "", scope: "global" | "product" = spec.scope === "global" ? "global" : "product"): ProductSpecEntry[] {
   const productId = scope === "product" ? spec.productId || undefined : undefined;
@@ -830,9 +877,10 @@ async function analyseProductSpec(requirementCode: string, productId: string): P
   const constraints = unique(prd.split(/\n+/).filter((line) => /(必须|不得|不能|仅允许|需要支持|约束)/.test(line)).map((line) => line.replace(/^[-*]\s*/, "").trim()));
   const colors = unique(Array.from(prd.matchAll(/#[0-9a-fA-F]{3,8}\b/g), (match) => match[0]));
   const demoSummary = version.demoEntryUrl ? await analyseDemo(version.demoEntryUrl) : { summary: "", demoIds: [], supportsAutomation: false };
+  const demoBaseline = version.demoEntryUrl ? await buildDemoBaseline(requirement, version) : undefined;
   const componentNames = unique(["Button", "Input", "Select", "Dialog", "Table", "Tabs", "Card"].filter((name) => new RegExp(name, "i").test(demoSummary.summary) || new RegExp(name, "i").test(prd)));
   const components = componentNames.map((name) => ({ name, usage: `复用 ${name} 组件完成相同交互场景。`, states: ["default", "hover", "disabled"], interaction: [], sourceRequirementCodes: [requirementCode] }));
-  const spec: ProductSpec = { id: `spec_${productId}`, productId, scope: "product", version: 0, rules: { terminology, businessConstraints: constraints, copywriting: [] }, prd: { structure: headings, writingRules: ["先说明目标与范围，再描述流程、规则和验收标准。"] }, tokens: colors.length ? { color: { sourceColors: colors } } : {}, components, demo: { layoutPrinciples: ["保持与现有产品布局一致。"], componentReuseRules: ["优先复用已有组件，不重复创建近似组件。"], interactionRequirements: [], constraints: ["生成 Demo 必须覆盖正常、异常和空状态。"] }, updatedAt: now() };
+  const spec: ProductSpec = { id: `spec_${productId}`, productId, scope: "product", version: 0, rules: { terminology, businessConstraints: constraints, copywriting: [] }, prd: { structure: headings, writingRules: ["先说明目标与范围，再描述流程、规则和验收标准。"] }, tokens: colors.length ? { color: { sourceColors: colors } } : {}, components, demo: { layoutPrinciples: ["保持与现有产品布局一致。", ...(demoBaseline ? ["必须保留原始 Demo 的页面壳、页签和主要区域比例。"] : [])], componentReuseRules: ["优先复用已有组件，不重复创建近似组件。", ...(demoBaseline ? ["必须保留关键 data-demo-id 和原始模板片段。"] : [])], interactionRequirements: demoBaseline ? ["必须保留基线中的关键采购开单状态和异常交互。"] : [], constraints: ["生成 Demo 必须覆盖正常、异常和空状态。"] }, demoBaseline, updatedAt: now() };
   spec.entries = legacyEntries(spec, requirementCode);
   return spec;
 }
@@ -863,6 +911,11 @@ export async function extractProductSpec(requirementCode: string, productId: str
   const store = await ensureStore();
   const requirement = store.requirements.find((item) => item.code === requirementCode);
   if (!requirement) throw new Error("需求不存在。");
+  const preflight = await getProductSpecExtractionPreflight(requirementCode, productId);
+  if (!preflight.passed) {
+    const failedChecks = preflight.checks.filter((check) => check.status === "failed").map((check) => `${check.label}：${check.detail}`);
+    throw new Error(`产品规范提取前置条件未满足。${failedChecks.length ? ` ${failedChecks.join("；")}` : ""}`);
+  }
   await getProduct(productId);
   const existing = (store.productSpecs ?? []).find((item) => item.productId === productId) ?? emptyProductSpec(productId);
   const draftSpec = analysedDraftSpec ?? await analyseProductSpec(requirementCode, productId);
@@ -876,20 +929,63 @@ export async function getProductSpecExtractionContext(requirementCode: string, p
   const version = requirement ? store.versions.find((item) => item.id === requirement.currentVersionId) : undefined;
   if (!requirement || !version) throw new Error("需求或当前版本不存在。");
   await getProduct(productId);
-  const demoSummary = version.demoEntryUrl ? await analyseDemo(version.demoEntryUrl) : { summary: "当前版本没有 Demo。", demoIds: [], supportsAutomation: false };
-  const demoHtml = version.demoEntryUrl ? await readDemoSource(version.demoEntryUrl) : "";
+  if (requirement.productId && requirement.productId !== productId) throw new Error("需求已绑定其他产品，不能提取到当前产品规范。");
+  if (version.prd.trim().length < 10) throw new Error("当前版本 PRD 内容不足，无法提取产品规范。");
+  if (!version.demoEntryUrl) throw new Error("当前版本缺少原始 Demo 入口，无法提取可复用页面规范。");
+  const demoBaseline = await buildDemoBaseline(requirement, version);
+  const demoSummary = await analyseDemo(version.demoEntryUrl);
+  const demoHtml = await readDemoSource(version.demoEntryUrl);
   const testCases = (store.testCases ?? [])
     .filter((item) => item.requirementCode === requirementCode && item.versionNo === version.number)
     .slice(0, 40)
     .map((item) => ({ title: item.title, module: item.module, type: item.type, steps: item.steps, expectedResults: item.expectedResults }));
   return clone({
-    requirement: { code: requirement.code, title: requirement.title, status: requirement.status },
-    version: { number: version.number, changeSummary: version.changeSummary },
+    requirement: { code: requirement.code, title: requirement.title, status: requirement.status, productId: requirement.productId },
+    version: { number: version.number, changeSummary: version.changeSummary, demoEntryUrl: version.demoEntryUrl },
     prd: version.prd.slice(0, 60_000),
     demoHtml,
     demoSummary,
+    demoBaseline,
     testCases,
     programSpec: await analyseProductSpec(requirementCode, productId),
+  });
+}
+
+export async function getProductSpecExtractionPreflight(requirementCode: string, productId: string): Promise<ProductSpecExtractionPreflight> {
+  const store = await ensureStore();
+  const requirement = store.requirements.find((item) => item.code === requirementCode);
+  const version = requirement ? store.versions.find((item) => item.id === requirement.currentVersionId) : undefined;
+  if (!requirement || !version) throw new Error("需求或当前版本不存在。");
+  await getProduct(productId);
+
+  const checks: ProductSpecExtractionPreflight["checks"] = [];
+  const prdChars = version.prd.trim().length;
+  checks.push({ id: "prd", label: "PRD", status: prdChars >= 10 ? "passed" : "failed", detail: prdChars >= 10 ? `已读取 ${prdChars.toLocaleString("zh-CN")} 字，可用于提取。` : "当前版本 PRD 内容不足 10 个字符。" });
+
+  const bindingPassed = !requirement.productId || requirement.productId === productId;
+  checks.push({ id: "product-binding", label: "产品归属", status: bindingPassed ? "passed" : "failed", detail: bindingPassed ? (requirement.productId ? "需求已绑定当前产品。" : "需求暂未绑定产品，本次可绑定到所选产品。") : "需求已绑定其他产品，不能提取到当前产品规范。" });
+
+  let baseline: ProductSpecExtractionPreflight["baseline"] = null;
+  if (!version.demoEntryUrl) {
+    checks.push({ id: "demo-entry", label: "原始 Demo 入口", status: "failed", detail: "当前版本没有已发布 Demo 入口。" });
+    checks.push({ id: "demo-baseline", label: "Demo 页面基线", status: "failed", detail: "缺少 Demo 入口，无法读取原始页面并建立基线。" });
+  } else {
+    checks.push({ id: "demo-entry", label: "原始 Demo 入口", status: "passed", detail: version.demoEntryUrl });
+    try {
+      const captured = await buildDemoBaseline(requirement, version);
+      baseline = { sourceRequirementCode: captured.sourceRequirementCode, sourceVersionNo: captured.sourceVersionNo, entryUrl: captured.entryUrl, sourceHash: captured.sourceHash, pageIds: captured.pageIds, requiredDemoIds: captured.requiredDemoIds };
+      checks.push({ id: "demo-baseline", label: "Demo 页面基线", status: "passed", detail: `已读取原始 Demo，保留 ${captured.pageIds.length} 个页面标识和 ${captured.requiredDemoIds.length} 个关键交互标识。` });
+    } catch (error) {
+      checks.push({ id: "demo-baseline", label: "Demo 页面基线", status: "failed", detail: error instanceof Error ? error.message : "原始 Demo 无法读取或缺少结构标识。" });
+    }
+  }
+
+  return clone({
+    passed: checks.filter((check) => check.status === "failed").length === 0,
+    requirement: { code: requirement.code, title: requirement.title, status: requirement.status, productId: requirement.productId },
+    version: { number: version.number, prdChars, demoEntryUrl: version.demoEntryUrl },
+    checks,
+    baseline,
   });
 }
 
@@ -998,6 +1094,7 @@ export async function mergeProductSpec(productId: string, draftSpec: ProductSpec
       tokens: { ...base.tokens, ...incoming.tokens },
       components: mergeComponents(base.components, incoming.components),
       demo: { ...base.demo, ...incoming.demo, layoutPrinciples: mergeStrings(base.demo.layoutPrinciples, incoming.demo.layoutPrinciples), componentReuseRules: mergeStrings(base.demo.componentReuseRules, incoming.demo.componentReuseRules), interactionRequirements: mergeStrings(base.demo.interactionRequirements, incoming.demo.interactionRequirements), constraints: mergeStrings(base.demo.constraints, incoming.demo.constraints) },
+      demoBaseline: incoming.demoBaseline ?? base.demoBaseline,
       entries: mergeEntries(normalizedEntries(base), normalizedEntries(incoming).filter((entry) => entry.scope === scope), scope, targetProductId),
       updatedAt: timestamp,
       updatedBy: actor?.name,
@@ -1986,13 +2083,82 @@ async function analyseDemo(entryUrl: string): Promise<DemoAnalysis> {
 }
 
 async function readDemoSource(entryUrl: string) {
+  const html = await readDemoSourceFull(entryUrl);
+  return html.slice(0, 60_000);
+}
+
+async function readDemoSourceFull(entryUrl: string) {
   const relative = /^(?:\/demo-assets|\/demo-runtime)\/(.+)$/.exec(entryUrl)?.[1];
   if (!relative) return "";
   const segments = relative.split("/");
   if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === ".." || /[\\/]/.test(segment))) return "";
   const filePath = path.resolve(PUBLISHED_DEMO_DIR, ...segments);
   if (!filePath.startsWith(`${PUBLISHED_DEMO_DIR}${path.sep}`)) return "";
-  try { return (await readFile(filePath, "utf8")).slice(0, 60_000); } catch { return ""; }
+  try {
+    const file = await stat(filePath);
+    if (!file.isFile() || file.size > 1_500_000) return "";
+    return await readFile(filePath, "utf8");
+  } catch { return ""; }
+}
+
+export async function validateDemoAgainstProductBaseline(productId: string, html: string): Promise<DemoBaselineValidation> {
+  if (!html.trim()) throw new Error("待校验的 Demo HTML 不能为空。");
+  const actualSize = Buffer.byteLength(html, "utf8");
+  if (actualSize > 2 * 1024 * 1024) throw new Error("待校验的 Demo HTML 不得超过 2MB。");
+  const actualHash = createHash("sha256").update(html).digest("hex");
+  const spec = await getProductSpec(productId);
+  const baseline = spec.demoBaseline;
+  if (!baseline) {
+    return {
+      passed: true,
+      baseline: null,
+      checks: [
+        { id: "baseline", status: "warning", detail: "当前产品尚未建立原始 Demo 基线，未执行结构保留校验。" },
+        { id: "actual-structure", status: "warning", detail: "本次结果包含 " + demoAttributeValues(html, "data-demo-page").length + " 个页面标识、" + demoAttributeValues(html, "data-demo-id").length + " 个交互标识，可作为后续基线。", },
+      ],
+      missingDemoIds: [],
+      missingPageIds: [],
+      missingFragmentIds: [],
+      warnings: ["当前产品没有原始 Demo 基线，本次结果无法与原始 Demo 比对，结构一致性未经验证。"],
+      repairRequired: false,
+      sourceHash: "",
+      actualHash,
+      actualSize,
+      actualDemoIdCount: demoAttributeValues(html, "data-demo-id").length,
+      actualPageIdCount: demoAttributeValues(html, "data-demo-page").length,
+    };
+  }
+  const actualDemoIds = new Set(demoAttributeValues(html, "data-demo-id"));
+  const actualPageIds = new Set(demoAttributeValues(html, "data-demo-page"));
+  const missingDemoIds = baseline.requiredDemoIds.filter((id) => !actualDemoIds.has(id));
+  const missingPageIds = baseline.pageIds.filter((id) => !actualPageIds.has(id));
+  const missingFragmentIds = baseline.fragmentIds.filter((id) => !html.includes(id));
+  const warnings: string[] = [];
+  if (actualSize < baseline.sourceSize * 0.5) warnings.push("生成结果体积不足原始 Demo 的一半（" + actualSize + " / " + baseline.sourceSize + " 字节），疑似重新设计了页面。");
+  if (actualHash === baseline.sourceHash) warnings.push("生成结果与原始 Demo 完全一致，未体现本次需求改动。");
+  if (missingFragmentIds.length) warnings.push("丢失片段标识：" + missingFragmentIds.join(", "));
+  const repairRequired = missingDemoIds.length > 0 || missingPageIds.length > 0;
+  const checks: DemoBaselineValidation["checks"] = [
+    { id: "source", status: "passed", detail: "已按 " + baseline.sourceRequirementCode + " V" + baseline.sourceVersionNo + " 的 Demo 基线校验（基线 " + baseline.sourceSize + " 字节，结果 " + actualSize + " 字节）。" },
+    { id: "page-ids", status: missingPageIds.length ? "failed" : "passed", detail: missingPageIds.length ? "缺少页面标识：" + missingPageIds.join(", ") : "保留了 " + baseline.pageIds.length + " 个页面标识。" },
+    { id: "demo-ids", status: missingDemoIds.length ? "failed" : "passed", detail: missingDemoIds.length ? "缺少关键交互标识：" + missingDemoIds.join(", ") : "保留了 " + baseline.requiredDemoIds.length + " 个关键交互标识。" },
+    { id: "fragments", status: missingFragmentIds.length ? "warning" : "passed", detail: missingFragmentIds.length ? "丢失片段标识：" + missingFragmentIds.join(", ") : "保留了 " + baseline.fragmentIds.length + " 个片段标识。" },
+  ];
+  return {
+    passed: !repairRequired,
+    baseline: { sourceRequirementCode: baseline.sourceRequirementCode, sourceVersionNo: baseline.sourceVersionNo, entryUrl: baseline.entryUrl, sourceHash: baseline.sourceHash, pageIds: baseline.pageIds, requiredDemoIds: baseline.requiredDemoIds },
+    checks,
+    missingDemoIds,
+    missingPageIds,
+    missingFragmentIds,
+    warnings,
+    repairRequired,
+    sourceHash: baseline.sourceHash,
+    actualHash,
+    actualSize,
+    actualDemoIdCount: actualDemoIds.size,
+    actualPageIdCount: actualPageIds.size,
+  };
 }
 
 export async function getTestCaseGenerationContext(requirementCode: string, versionNo: number) {

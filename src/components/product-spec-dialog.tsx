@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
-import type { Product, ProductSpec, ProductSpecChange } from "@/lib/types";
+import type { Product, ProductSpec, ProductSpecChange, ProductSpecExtractionPreflight } from "@/lib/types";
 
 type Extraction = { product: Product; changes: ProductSpecChange[]; summary: { total: number; added: number; supplemented: number; conflicts: number }; draftSpec: ProductSpec };
 type ConflictAction = "keep_existing" | "use_incoming" | "product_override";
@@ -25,11 +25,24 @@ export function ProductSpecDialog({ open, requirementCode, initialProductId, onC
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [decisions, setDecisions] = useState<Record<number, ConflictAction>>({});
+  const [preflightState, setPreflightState] = useState<{ key: string; data: ProductSpecExtractionPreflight | null } | null>(null);
+  const preflightKey = open && selectedId && step === "select" ? requirementCode + "|" + selectedId : "";
+  const preflight: ProductSpecExtractionPreflight | null = preflightKey && preflightState?.key === preflightKey ? preflightState.data : null;
+  const preflightBusy = Boolean(preflightKey) && preflightState?.key !== preflightKey;
 
   useEffect(() => {
     if (!open) return;
     void request<Product[]>("/api/v1/products").then(setProducts).catch((reason) => setError(reason instanceof Error ? reason.message : "无法读取产品。"));
   }, [open]);
+
+  useEffect(() => {
+    if (!preflightKey) return;
+    let active = true;
+    void request<ProductSpecExtractionPreflight>(`/api/v1/requirements/${encodeURIComponent(requirementCode)}/product-spec-extraction/preflight?productId=${encodeURIComponent(selectedId)}`)
+      .then((data) => { if (active) setPreflightState({ key: preflightKey, data }); })
+      .catch((reason) => { if (active) { setPreflightState({ key: preflightKey, data: null }); setError(reason instanceof Error ? reason.message : "无法读取提取前置条件。"); } });
+    return () => { active = false; };
+  }, [preflightKey, requirementCode, selectedId]);
 
   if (!open) return null;
 
@@ -113,7 +126,14 @@ export function ProductSpecDialog({ open, requirementCode, initialProductId, onC
               <button type="button" className="product-spec-add" onClick={() => setNewProductOpen(true)} title="新增产品" aria-label="新增产品"><Icon name="plus" /></button>
             </div>
           </label>
-          <p className="product-spec-hint">选择后，本次提取结果会保存到该产品的全局规范。</p>
+          <p className="product-spec-hint">选择后，本次提取结果会保存到所选产品规范。</p>
+          <div className="product-spec-preflight" aria-live="polite">
+            <div className="product-spec-preflight-head"><strong>提取前检查</strong>{preflightBusy ? <span>读取中…</span> : preflight ? <span className={preflight.passed ? "is-passed" : "is-failed"}>{preflight.passed ? "可以提取" : "暂不能提取"}</span> : <span>请选择产品</span>}</div>
+            {preflight ? <>
+              <p className="product-spec-preflight-source">{preflight.requirement.title} · V{preflight.version.number} · PRD {preflight.version.prdChars.toLocaleString("zh-CN")} 字</p>
+              <div className="product-spec-check-list">{preflight.checks.map((check) => <div className={`product-spec-check is-${check.status}`} key={check.id}><b aria-hidden="true">{check.status === "passed" ? "✓" : check.status === "warning" ? "!" : "×"}</b><span><strong>{check.label}</strong><small>{check.detail}</small></span></div>)}</div>
+            </> : <p className="product-spec-preflight-empty">需要先选择产品，系统才会检查 PRD、产品归属和已发布 Demo 基线。</p>}
+          </div>
         </div> : step === "extract" ? <div className="product-spec-progress is-extracting" role="status" aria-live="polite"><span className="product-spec-progress-icon" aria-hidden="true"><Icon name="sparkles" /></span><strong>正在提取产品规范</strong><p>正在读取 PRD、Demo HTML、CSS、DOM 和测试用例，再由 AI 提炼可复用规范…</p><div className="product-spec-progress-track" aria-hidden="true"><span /></div></div> : result ? <div className="product-spec-review">
           <div className="product-spec-summary"><strong>发现 {result.summary.total} 项规范变化</strong><span>公共规范 {result.changes.filter((change) => change.scope === "global").length}</span><span>产品规范 {result.changes.filter((change) => change.scope !== "global").length}</span><span>新增 {result.summary.added}</span><span>补充 {result.summary.supplemented}</span><span className={result.summary.conflicts ? "has-conflict" : ""}>冲突 {result.summary.conflicts}</span></div>
           <div className="product-spec-changes">{result.changes.length ? result.changes.map((change, index) => <div key={`${change.path}-${index}`} className={`product-spec-change is-${change.category}`}><b>{change.category === "added" ? "新增" : change.category === "supplemented" ? "补充" : "冲突"}</b><span>{change.summary}</span><small>{change.path}</small>{change.category === "conflict" ? <select value={decisions[index] || "keep_existing"} onChange={(event) => setDecisions((current) => ({ ...current, [index]: event.target.value as ConflictAction }))} aria-label={`处理冲突 ${change.path}`}><option value="keep_existing">保持现有</option><option value="use_incoming">使用当前提取</option><option value="product_override">仅作为产品规范</option></select> : null}{change.scope ? <select value={change.scope} onChange={(event) => { const scope = event.target.value as "global" | "product"; const incomingTitle = typeof change.incoming === "object" && change.incoming && "title" in change.incoming ? String(change.incoming.title) : ""; setResult((current) => current ? { ...current, draftSpec: { ...current.draftSpec, entries: current.draftSpec.entries?.map((entry) => entry.title === incomingTitle ? { ...entry, scope, productId: scope === "product" ? current.product.id : undefined } : entry) } } : current); }} aria-label={`规范作用域 ${change.path}`}><option value="global">公共</option><option value="product">当前产品</option></select> : null}</div>) : <p className="product-spec-empty">没有发现新的规范变化。</p>}</div>
@@ -121,7 +141,7 @@ export function ProductSpecDialog({ open, requirementCode, initialProductId, onC
         {error ? <p className="product-spec-error">{error}</p> : null}
         <footer>
           <button type="button" onClick={onClose}>取消</button>
-          {step === "select" ? <button type="button" className="primary" disabled={!selectedId || busy} onClick={() => void extract()}>开始提取</button> : null}
+          {step === "select" ? <button type="button" className="primary" disabled={!selectedId || busy || preflightBusy || !preflight?.passed} onClick={() => void extract()}>开始提取</button> : null}
           {step === "review" ? <button type="button" className="primary" disabled={busy} onClick={() => void merge()}>确认更新</button> : null}
         </footer>
       </section>

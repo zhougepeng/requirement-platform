@@ -4,7 +4,6 @@ import { getRequirementDetail, recordRequirementAudit, updateRequirementReleaseS
 import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
 import { scheduleRequirementKnowledgeExtraction } from "@/services/materials/requirement-knowledge-extraction-service";
 import { detachGeneratedMaterialSource } from "@/services/materials/material-service";
-import { scheduleRequirementProductSpecExtraction } from "@/services/requirement/product-spec-extraction-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +30,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ re
     scheduleRequirementKnowledgeSync(requirementCode);
     if (updated.status === "online" && before.requirement.status !== "online") {
       scheduleRequirementKnowledgeExtraction(requirementCode);
-      scheduleRequirementProductSpecExtraction(requirementCode, actor);
     }
     else await detachGeneratedMaterialSource(requirementCode);
     return apiJson(updated);

@@ -2,7 +2,6 @@ import { apiError, apiJson } from "@/lib/api-response";
 import { publishRequirement, recordRequirementAudit } from "@/services/requirement/repository";
 import { publisherFromRequest } from "@/services/auth/request-actor";
 import { scheduleRequirementKnowledgeSync } from "@/services/assistant/knowledge-sync-service";
-import { scheduleRequirementProductSpecExtraction } from "@/services/requirement/product-spec-extraction-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +24,6 @@ export async function POST(request: Request) {
     });
     await recordRequirementAudit({ requirementCode: published.requirement.code, action: "publish_requirement", actor, detail: "发布需求" });
     scheduleRequirementKnowledgeSync(published.requirement.code);
-    if (published.requirement.status === "online") scheduleRequirementProductSpecExtraction(published.requirement.code, published.requirement.ownerId && published.requirement.owner ? { id: published.requirement.ownerId, name: published.requirement.owner } : undefined);
     return apiJson(published, { status: 201 });
   } catch (error) {
     return apiError(error);

@@ -271,6 +271,47 @@ export type ProductSpecEntry = {
   confidence?: number;
 };
 
+/** Immutable structural facts captured from the published source Demo. */
+export type DemoBaseline = {
+  mode: "baseline_extension";
+  sourceRequirementCode: string;
+  sourceVersionNo: number;
+  entryUrl: string;
+  entryPath: string;
+  sourceHash: string;
+  sourceSize: number;
+  pageIds: string[];
+  demoIds: string[];
+  fragmentIds: string[];
+  requiredDemoIds: string[];
+  capturedAt: string;
+};
+
+export type DemoBaselineValidation = {
+  passed: boolean;
+  baseline: Pick<DemoBaseline, "sourceRequirementCode" | "sourceVersionNo" | "entryUrl" | "sourceHash" | "pageIds" | "requiredDemoIds"> | null;
+  checks: Array<{ id: string; status: "passed" | "failed" | "warning"; detail: string }>;
+  missingDemoIds: string[];
+  missingPageIds: string[];
+  missingFragmentIds: string[];
+  warnings: string[];
+  /** true 表示生成结果丢失了基线结构，必须在交付前修复，不能按合格交付。 */
+  repairRequired: boolean;
+  sourceHash: string;
+  actualHash: string;
+  actualSize: number;
+  actualDemoIdCount: number;
+  actualPageIdCount: number;
+};
+
+export type ProductSpecExtractionPreflight = {
+  passed: boolean;
+  requirement: { code: string; title: string; status?: "offline" | "scheduled" | "online"; productId?: string };
+  version: { number: number; prdChars: number; demoEntryUrl?: string };
+  checks: Array<{ id: string; label: string; status: "passed" | "failed" | "warning"; detail: string }>;
+  baseline: Pick<DemoBaseline, "sourceRequirementCode" | "sourceVersionNo" | "entryUrl" | "sourceHash" | "pageIds" | "requiredDemoIds"> | null;
+};
+
 export type ProductSpec = {
   id: string;
   productId: string;
@@ -301,6 +342,8 @@ export type ProductSpec = {
     interactionRequirements: string[];
     constraints: string[];
   };
+  /** Present only for products whose Demo generation must extend a source Demo. */
+  demoBaseline?: DemoBaseline;
   /** Structured rules are the executable form. Legacy fields remain for compatibility. */
   entries?: ProductSpecEntry[];
   scope?: SpecScope;
