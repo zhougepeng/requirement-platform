@@ -313,10 +313,15 @@ function RequirementBoard({
       offline: requirements.length - online - scheduled,
     };
   }, [projects]);
-  const ongoingProjectRows = useMemo(
-    () => projects.filter((project) => project.requirements.some((requirement) => releaseStatusOfSummary(requirement) !== "online")),
-    [projects],
-  );
+  const projectRows = useMemo(() => {
+    return projects.map((project) => {
+      const total = project.requirements.length;
+      const online = project.requirements.filter((requirement) => releaseStatusOfSummary(requirement) === "online").length;
+      const scheduled = project.requirements.filter((requirement) => releaseStatusOfSummary(requirement) === "scheduled").length;
+      const offline = total - online - scheduled;
+      return { project, total, online, scheduled, offline, ongoing: scheduled > 0 || offline > 0, completionRate: total ? Math.round((online / total) * 100) : 0 };
+    }).filter((row) => row.ongoing);
+  }, [projects]);
   const ownerRows = useMemo(() => {
     const rows = new Map<string, { total: number; online: number; scheduled: number }>();
     for (const project of projects) {
@@ -399,25 +404,14 @@ function RequirementBoard({
         </div>
       </div>
       <MonthlyReleaseChart months={monthlyReleases} />
-      <div className="board-project-list">
-        <div className="board-project-list-head" aria-hidden="true">
-          <span className="board-project-list-project">项目</span>
-          <span>需求数</span>
-          <span>已上线</span>
-          <span>已排期</span>
-          <span>未上线</span>
-          <span />
-        </div>
-        {ongoingProjectRows.length ? ongoingProjectRows.map((project) => {
-          const total = project.requirements.length;
-          const online = project.requirements.filter(
-            (requirement) => releaseStatusOfSummary(requirement) === "online",
-          ).length;
-          const scheduled = project.requirements.filter(
-            (requirement) => releaseStatusOfSummary(requirement) === "scheduled",
-          ).length;
-          const offline = total - online - scheduled;
-          const ongoing = scheduled > 0 || offline > 0;
+      <section className="board-project-list">
+        <header className="board-project-list-header">
+          <div>
+            <div className="board-section-title"><Icon name="folder" /><b>项目数据</b><small>{projectRows.length}</small></div>
+          </div>
+        </header>
+        <div className="board-project-grid">
+        {projectRows.length ? projectRows.map(({ project, total, online, scheduled, offline, completionRate }) => {
           return (
             <button
               key={project.id}
@@ -425,19 +419,20 @@ function RequirementBoard({
               onClick={() => onOpenProject(project)}
             >
               <span className="board-project-icon"><Icon name="folder" /></span>
-              <span className="board-project-title">
-                <b>{project.name}</b>
-                <em className={`board-project-status ${ongoing ? "is-ongoing" : "is-complete"}`}>{ongoing ? "进行中" : "已全部上线"}</em>
+              <span className="board-project-title"><b title={project.name}>{project.name}</b></span>
+              <em className="board-project-status is-ongoing">进行中</em>
+              <span className="board-project-counts">
+                <span className="is-completion" aria-label={"完成率 " + completionRate + "%，共 " + total + " 条需求"}><b>{completionRate}%</b><small>{total} 条</small></span>
+                <span className="is-online" aria-label={"已上线 " + online}><b>{online}</b><small>上线</small></span>
+                <span className="is-scheduled" aria-label={"已排期 " + scheduled}><b>{scheduled}</b><small>排期</small></span>
+                <span className="is-offline" aria-label={"未上线 " + offline}><b>{offline}</b><small>未上线</small></span>
               </span>
-              <b className="board-project-value">{total}</b>
-              <b className="board-project-value is-online">{online}</b>
-              <b className="board-project-value is-scheduled">{scheduled}</b>
-              <b className="board-project-value is-offline">{offline}</b>
               <Icon name="chevron" />
             </button>
           );
-        }) : <p className="board-project-empty">暂无进行中的项目。</p>}
-      </div>
+        }) : <p className="board-project-empty">暂无项目</p>}
+        </div>
+      </section>
       <BoardOwnerTable rows={ownerRows} />
       <RequirementTimeline onOpenRequirement={onOpenRequirement} refreshKey={projects} />
     </div>

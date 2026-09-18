@@ -119,11 +119,27 @@ export type RequirementTimelinePage = {
   nextCursor?: string;
 };
 
-export function releaseStatusOf(requirement: Pick<import("@/lib/types").Requirement, "status">): RequirementReleaseStatus {
-  // Requirements created before release status was introduced are already
-  // published records. Keep them visible to the current-knowledge assistant;
-  // newly created requirements explicitly set status to offline below.
-  return requirement.status === "offline" || requirement.status === "scheduled" ? requirement.status : "online";
+export function releaseStatusOf(requirement: Pick<import("@/lib/types").Requirement, "status" | "scheduleVersion" | "scheduledGrayDate" | "scheduledFullDate" | "releaseVersion" | "releaseDate">): RequirementReleaseStatus {
+  if (requirement.status === "offline") return "offline";
+  if (requirement.status === "scheduled") {
+    return requirement.scheduleVersion
+      && validReleaseDate(requirement.scheduledGrayDate ?? "")
+      && validReleaseDate(requirement.scheduledFullDate ?? "")
+      ? "scheduled"
+      : "offline";
+  }
+  if (requirement.status === "online") {
+    return requirement.releaseVersion && validReleaseDate(requirement.releaseDate ?? "") ? "online" : "offline";
+  }
+
+  // Records created before release status existed have no status field. Only
+  // infer a state when its supporting fields are complete; uncertain records
+  // must not silently inflate the online count.
+  if (requirement.status === undefined) {
+    if (requirement.scheduleVersion && validReleaseDate(requirement.scheduledGrayDate ?? "") && validReleaseDate(requirement.scheduledFullDate ?? "")) return "scheduled";
+    if (requirement.releaseVersion && validReleaseDate(requirement.releaseDate ?? "")) return "online";
+  }
+  return "offline";
 }
 
 function clone<T>(value: T): T {
@@ -374,10 +390,12 @@ async function ensureStore(): Promise<RequirementStore> {
   }
   let migrated = false;
   for (const requirement of store.requirements) {
-    if (requirement.status !== "online" && requirement.status !== "scheduled" && requirement.status !== "offline") {
-      // Before release status existed, every stored requirement represented a
-      // published PRD. Preserve that meaning during schema migration.
-      requirement.status = "online";
+    const status = releaseStatusOf(requirement);
+    if (requirement.status !== status) {
+      // Before release status existed, old records may not contain enough
+      // information to prove that they were released. Infer only from a
+      // complete release record; otherwise keep the requirement offline.
+      requirement.status = status;
       migrated = true;
     }
   }
@@ -409,6 +427,12 @@ async function ensureStore(): Promise<RequirementStore> {
       summary.createdAt ??= requirement.createdAt;
       summary.updatedAt ??= requirement.updatedAt;
       summary.owner ??= requirement.owner ?? currentVersion?.publisher;
+      summary.status = releaseStatusOf(requirement);
+      summary.scheduleVersion = requirement.scheduleVersion;
+      summary.scheduledGrayDate = requirement.scheduledGrayDate;
+      summary.scheduledFullDate = requirement.scheduledFullDate;
+      summary.releaseVersion = requirement.releaseVersion;
+      summary.releaseDate = requirement.releaseDate;
       if (JSON.stringify(summary) !== previous) migrated = true;
     }
   }
@@ -1343,15 +1367,31 @@ export async function updateRequirementReleaseStatus(requirementCode: string, in
     const previousStatus = releaseStatusOf(requirement);
     requirement.status = status;
     if (status === "online") {
+      delete requirement.scheduleVersion;
+      delete requirement.scheduledGrayDate;
+      delete requirement.scheduledFullDate;
+      delete requirement.assignedDeveloperIds;
+      delete requirement.assignedTesterIds;
       requirement.releaseVersion = releaseVersion;
       requirement.releaseDate = releaseDate;
     }
     if (status === "scheduled") {
+      delete requirement.releaseVersion;
+      delete requirement.releaseDate;
       requirement.scheduleVersion = scheduleVersion;
       requirement.scheduledGrayDate = scheduledGrayDate;
       requirement.scheduledFullDate = scheduledFullDate;
       if (input.assignedDeveloperIds !== undefined) requirement.assignedDeveloperIds = cleanAssignmentIds(input.assignedDeveloperIds);
       if (input.assignedTesterIds !== undefined) requirement.assignedTesterIds = cleanAssignmentIds(input.assignedTesterIds);
+    }
+    if (status === "offline") {
+      delete requirement.scheduleVersion;
+      delete requirement.scheduledGrayDate;
+      delete requirement.scheduledFullDate;
+      delete requirement.releaseVersion;
+      delete requirement.releaseDate;
+      delete requirement.assignedDeveloperIds;
+      delete requirement.assignedTesterIds;
     }
     requirement.updatedAt = now();
     const summary = project.requirements.find((item) => item.code === requirementCode);
