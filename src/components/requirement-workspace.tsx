@@ -341,38 +341,53 @@ function RequirementBoard({
       offline: counts.total - counts.online - counts.scheduled,
     })).toSorted((a, b) => b.total - a.total || a.owner.localeCompare(b.owner));
   }, [projects]);
-  const monthlyReleases = useMemo(() => {
-    const currentDate = new Date();
-    const buckets = Array.from({ length: 12 }, (_, index) => {
-      const date = new Date(
-        currentDate.getFullYear(),
-        currentDate.getMonth() - (11 - index),
-        1,
-      );
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-      return {
-        key,
-        label: `${date.getMonth() + 1}月`,
-        onlineItems: [] as Array<{ projectName: string; requirementName: string }>,
-        scheduledItems: [] as Array<{ projectName: string; requirementName: string }>,
-      };
-    });
-    const byMonth = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+  const monthlyCharts = useMemo(() => {
+    const onlineBuckets = createMonthlyReleaseBuckets(-11, 0);
+    const scheduledBuckets = createMonthlyReleaseBuckets(0, 11);
+    const overdueScheduledBucket: MonthlyReleaseBucket = { key: "overdue", label: "逾期", items: [] };
+    const onlineByMonth = new Map(onlineBuckets.map((bucket) => [bucket.key, bucket]));
+    const scheduledByMonth = new Map(scheduledBuckets.map((bucket) => [bucket.key, bucket]));
+    const currentMonth = scheduledBuckets[0]?.key ?? "";
+    const counts = {
+      onlineOutsideWindow: 0,
+      onlineWithoutValidDate: 0,
+      scheduledOutsideWindow: 0,
+      scheduledWithoutValidDate: 0,
+    };
     for (const project of projects) {
       for (const requirement of project.requirements) {
+        const status = releaseStatusOfSummary(requirement);
+        if (status === "offline") continue;
         const date = currentReleaseDate(requirement);
-        const month = date?.slice(0, 7);
-        if (!month) continue;
         const item = {
           projectName: project.name,
           requirementName: requirement.title,
         };
-        const status = releaseStatusOfSummary(requirement);
-        if (status === "online") byMonth.get(month)?.onlineItems.push(item);
-        if (status === "scheduled") byMonth.get(month)?.scheduledItems.push(item);
+        if (!date) {
+          if (status === "online") counts.onlineWithoutValidDate += 1;
+          if (status === "scheduled") counts.scheduledWithoutValidDate += 1;
+          continue;
+        }
+        const month = date.slice(0, 7);
+        if (status === "online") {
+          const bucket = onlineByMonth.get(month);
+          if (bucket) bucket.items.push(item);
+          else counts.onlineOutsideWindow += 1;
+        }
+        if (status === "scheduled") {
+          const bucket = month < currentMonth
+            ? overdueScheduledBucket
+            : scheduledByMonth.get(month);
+          if (bucket) bucket.items.push(item);
+          else counts.scheduledOutsideWindow += 1;
+        }
       }
     }
-    return buckets;
+    return {
+      onlineBuckets,
+      scheduledBuckets: [overdueScheduledBucket, ...scheduledBuckets],
+      ...counts,
+    };
   }, [projects]);
 
   return (
@@ -403,7 +418,22 @@ function RequirementBoard({
           <div><small>已排期</small><b>{overview.scheduled}</b></div>
         </div>
       </div>
-      <MonthlyReleaseChart months={monthlyReleases} />
+      <div className="monthly-release-grid">
+        <MonthlyReleaseChart
+          kind="online"
+          metricLabel="已上线"
+          months={monthlyCharts.onlineBuckets}
+          outsideWindowCount={monthlyCharts.onlineOutsideWindow}
+          invalidDateCount={monthlyCharts.onlineWithoutValidDate}
+        />
+        <MonthlyReleaseChart
+          kind="scheduled"
+          metricLabel="已排期"
+          months={monthlyCharts.scheduledBuckets}
+          outsideWindowCount={monthlyCharts.scheduledOutsideWindow}
+          invalidDateCount={monthlyCharts.scheduledWithoutValidDate}
+        />
+      </div>
       <section className="board-project-list">
         <header className="board-project-list-header">
           <div>
@@ -460,6 +490,26 @@ function currentReleaseDate(requirement: RequirementSummary) {
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day
     ? `${yearText}-${monthText}-${dayText}`
     : undefined;
+}
+
+type MonthlyReleaseItem = { projectName: string; requirementName: string };
+type MonthlyReleaseBucket = { key: string; label: string; items: MonthlyReleaseItem[] };
+
+function createMonthlyReleaseBuckets(startOffset: number, endOffset: number) {
+  const currentDate = new Date();
+  return Array.from({ length: endOffset - startOffset + 1 }, (_, index) => {
+    const date = new Date(
+      currentDate.getFullYear(),
+      currentDate.getMonth() + startOffset + index,
+      1,
+    );
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    return {
+      key,
+      label: `${date.getMonth() + 1}月`,
+      items: [] as MonthlyReleaseItem[],
+    } satisfies MonthlyReleaseBucket;
+  });
 }
 
 function RequirementTimeline({ onOpenRequirement, refreshKey }: { onOpenRequirement: (requirementCode: string) => void; refreshKey: Project[] }) {
@@ -658,65 +708,80 @@ function MyRequirementTimeline({
 }
 
 function MonthlyReleaseChart({
+  kind,
+  metricLabel,
   months,
+  outsideWindowCount,
+  invalidDateCount,
 }: {
-  months: Array<{
-    key: string;
-    label: string;
-    onlineItems: Array<{ projectName: string; requirementName: string }>;
-    scheduledItems: Array<{ projectName: string; requirementName: string }>;
-  }>;
+  kind: "online" | "scheduled";
+  metricLabel: "已上线" | "已排期";
+  months: MonthlyReleaseBucket[];
+  outsideWindowCount: number;
+  invalidDateCount: number;
 }) {
   const [activeBar, setActiveBar] = useState<string | null>(null);
   const maxCount = Math.max(
     1,
-    ...months.flatMap((month) => [month.onlineItems.length, month.scheduledItems.length]),
+    ...months.map((month) => month.items.length),
   );
+  const total = months.reduce((sum, month) => sum + month.items.length, 0);
+  const rangeLabel = !months.length
+    ? ""
+    : kind === "scheduled"
+      ? `逾期及未来 12 个月，至 ${months[months.length - 1].key}`
+      : `${months[0].key} ~ ${months[months.length - 1].key}`;
+  const title = kind === "online" ? "近 12 个月上线情况" : "排期情况（逾期 + 未来 12 个月）";
+  const emptyText = kind === "online" ? "近 12 个月暂无已上线需求。" : "逾期及未来 12 个月暂无已排期需求。";
   return (
     <section className="monthly-release-chart">
       <header>
-        <div><Icon name="file" /><b>近 12 个月排期与上线情况</b></div>
-        <small>橙色：已排期 · 蓝色：已上线 · 悬停查看需求</small>
+        <div><Icon name="file" /><b>{title}</b></div>
+        <small
+          title={outsideWindowCount || invalidDateCount
+            ? `未计入：窗口外 ${outsideWindowCount} 条，日期异常 ${invalidDateCount} 条`
+            : undefined}
+        >
+          {rangeLabel} · {metricLabel} {total} 条
+          {outsideWindowCount ? ` · 窗口外 ${outsideWindowCount} 条` : ""}
+          {invalidDateCount ? ` · 日期异常 ${invalidDateCount} 条` : ""}
+        </small>
       </header>
       {months.length ? <div className="monthly-release-bars" style={{ gridTemplateColumns: `repeat(${months.length}, minmax(0, 1fr))` }}>
         {months.map((month) => <div className="monthly-release-column" key={month.key}>
           <div className="monthly-release-track">
-            {([
-              { kind: "scheduled", label: "已排期", items: month.scheduledItems },
-              { kind: "online", label: "已上线", items: month.onlineItems },
-            ] as const).map((bar) => {
-              const count = bar.items.length;
-              const barId = `${month.key}-${bar.kind}`;
-              const groupedItems = new Map<string, Array<{ projectName: string; requirementName: string }>>();
-              for (const item of bar.items) {
+            {(() => {
+              const count = month.items.length;
+              const barId = `${month.key}-${kind}`;
+              const groupedItems = new Map<string, MonthlyReleaseItem[]>();
+              for (const item of month.items) {
                 const items = groupedItems.get(item.projectName) ?? [];
                 items.push(item);
                 groupedItems.set(item.projectName, items);
               }
               return <button
-                className={`monthly-release-bar is-${bar.kind} ${count ? "has-data" : ""}`}
-                key={bar.kind}
+                className={`monthly-release-bar is-${kind} ${count ? "has-data" : ""}`}
                 style={{ height: `${Math.max(4, (count / maxCount) * 100)}%` }}
                 onMouseEnter={() => setActiveBar(barId)}
                 onMouseLeave={() => setActiveBar(null)}
                 onFocus={() => setActiveBar(barId)}
                 onBlur={() => setActiveBar(null)}
-                aria-label={`${month.key} ${bar.label} ${count} 个需求`}
+                aria-label={`${month.key} ${metricLabel} ${count} 个需求`}
               >
                 {count ? <span>{count}</span> : null}
                 {activeBar === barId ? <div className="monthly-release-tooltip" role="tooltip">
-                  <b>{month.key} · {bar.label} {count} 个需求</b>
+                  <b>{month.key} · {metricLabel} {count} 个需求</b>
                   {count ? Array.from(groupedItems, ([projectName, items]) => <div key={projectName}>
                     <strong>{projectName}</strong>
                     <ul>{items.map((item) => <li key={`${projectName}-${item.requirementName}`}>{item.requirementName}</li>)}</ul>
-                  </div>) : <span>当月暂无{bar.label}需求</span>}
+                  </div>) : <span>当月暂无{metricLabel}需求</span>}
                 </div> : null}
               </button>;
-            })}
+            })()}
           </div>
           <small>{month.label}</small>
         </div>)}
-      </div> : <p className="monthly-release-empty">近 12 个月暂无已排期或已上线的需求。</p>}
+      </div> : <p className="monthly-release-empty">{emptyText}</p>}
     </section>
   );
 }
