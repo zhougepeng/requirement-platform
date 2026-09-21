@@ -7,39 +7,111 @@ UNIT_NAME="${REQUIREMENT_PLATFORM_UPDATE_UNIT:-requirement-platform-updater}"
 INSTALLER_URL="https://github.com/zhougepeng/requirement-platform/releases/latest/download/requirement-platform-linux-x64.run"
 LOG_FILE="$PLATFORM_ROOT/update.log"
 LOCK_DIR="$PLATFORM_ROOT/.update-lock"
+STATUS_FILE="$PLATFORM_ROOT/update-status.json"
+# A crashed job can leave $LOCK_DIR behind forever. Treat a lock older than this
+# many seconds as stale so a single failure cannot disable updates permanently.
+STALE_LOCK_SECONDS="${REQUIREMENT_PLATFORM_STALE_LOCK_SECONDS:-3600}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "This updater must run as root." >&2
   exit 1
 fi
 
+json_escape() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\r'/ }"
+  value="${value//$'\n'/ }"
+  printf '%s' "$value"
+}
+
+write_status() {
+  local state="$1"
+  local message="$2"
+  local finished_at="${3:-}"
+  local installed_version="${4:-}"
+  local temporary_status="$STATUS_FILE.$$"
+  install -d -m 755 "$PLATFORM_ROOT"
+  {
+    printf '{"id":"%s","state":"%s","startedAt":"%s"' \
+      "$(json_escape "$JOB_ID")" "$(json_escape "$state")" "$(json_escape "$JOB_STARTED_AT")"
+    if [[ -n "$finished_at" ]]; then
+      printf ',"finishedAt":"%s"' "$(json_escape "$finished_at")"
+    fi
+    if [[ -n "$message" ]]; then
+      printf ',"message":"%s"' "$(json_escape "$message")"
+    fi
+    if [[ -n "$installed_version" ]]; then
+      printf ',"installedVersion":"%s"' "$(json_escape "$installed_version")"
+    fi
+    printf '}\n'
+  } > "$temporary_status"
+  chmod 644 "$temporary_status"
+  mv -f "$temporary_status" "$STATUS_FILE"
+}
+
+installed_version() {
+  local version_file="$PLATFORM_ROOT/current/VERSION"
+  if [[ -f "$version_file" ]]; then
+    tr -d '\r\n' < "$version_file"
+  fi
+}
+
+clear_stale_lock() {
+  [[ -d "$LOCK_DIR" ]] || return 0
+  local lock_mtime
+  lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo "")"
+  [[ -n "$lock_mtime" ]] || return 0
+  local lock_age=$(( $(date +%s) - lock_mtime ))
+  if (( lock_age > STALE_LOCK_SECONDS )); then
+    echo "Removing stale update lock (age ${lock_age}s)."
+    rm -rf "$LOCK_DIR"
+  fi
+}
+
 run_update() {
   install -d -m 755 "$PLATFORM_ROOT"
-  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "[$(date -Is)] An update is already running." >>"$LOG_FILE"
-    exit 0
-  fi
   temporary_installer="$(mktemp /tmp/requirement-platform-update.XXXXXX.run)"
   trap 'rm -f "$temporary_installer"; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
-  {
-    echo "[$(date -Is)] Downloading the latest Requirement Platform installer."
-    curl --fail --location --retry 3 --connect-timeout 15 --max-time 300 -o "$temporary_installer" "$INSTALLER_URL"
-    chmod 700 "$temporary_installer"
-    echo "[$(date -Is)] Installing the downloaded release."
-    bash "$temporary_installer"
-    echo "[$(date -Is)] Update completed."
-  } >>"$LOG_FILE" 2>&1
+  write_status "running" "正在下载最新安装包。"
+  if ! curl --fail --location --retry 3 --connect-timeout 15 --max-time 300 -o "$temporary_installer" "$INSTALLER_URL" >>"$LOG_FILE" 2>&1; then
+    write_status "failed" "下载最新安装包失败，请查看服务器 update.log。" "$(date -Is)" "$(installed_version)"
+    return 1
+  fi
+  chmod 700 "$temporary_installer"
+  write_status "running" "正在安装，服务稍后会自动重启。"
+  if ! bash "$temporary_installer" >>"$LOG_FILE" 2>&1; then
+    write_status "failed" "安装失败，已恢复上一版本（若可用）。请查看服务器 update.log。" "$(date -Is)" "$(installed_version)"
+    return 1
+  fi
+  write_status "success" "更新完成，服务已恢复。" "$(date -Is)" "$(installed_version)"
+  echo "[$(date -Is)] Update completed." >>"$LOG_FILE"
 }
 
 case "${1:-}" in
   --start)
+    JOB_ID="$(date +%s)-$RANDOM"
+    JOB_STARTED_AT="$(date -Is)"
+    clear_stale_lock
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+      echo "Update job already running."
+      exit 0
+    fi
+    write_status "running" "更新任务已启动，准备下载最新安装包。"
     # Do not wait for the installer to finish here. The installer restarts the
     # web service, so waiting would terminate the HTTP request before its JSON
     # response can be returned to the browser.
-    systemd-run --no-block --quiet --unit="${UNIT_NAME}-$(date +%s)-$RANDOM" --property=Type=oneshot "$0" --apply
+    if ! systemd-run --no-block --quiet --unit="${UNIT_NAME}-$JOB_ID" --property=Type=oneshot "$0" --apply "$JOB_ID" "$JOB_STARTED_AT"; then
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+      write_status "failed" "无法启动后台更新任务，请检查 systemd 和更新权限。" "$(date -Is)"
+      exit 1
+    fi
     echo "Update job started."
     ;;
   --apply)
+    JOB_ID="${2:-$(date +%s)-$RANDOM}"
+    JOB_STARTED_AT="${3:-$(date -Is)}"
     run_update
     ;;
   *)

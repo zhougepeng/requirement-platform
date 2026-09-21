@@ -9,6 +9,10 @@ const execFileAsync = promisify(execFile);
 const RELEASE_API = "https://api.github.com/repos/zhougepeng/requirement-platform/releases/latest";
 const INSTALLER_NAME = "requirement-platform-linux-x64.run";
 const UPDATER_PATH = "/usr/local/sbin/requirement-platform-updater";
+// A job stuck in "running" (crashed process, rebooted server) must not block
+// future updates forever. After this long, report it as failed so the page can
+// offer the update again.
+const STALE_JOB_MS = 60 * 60 * 1000;
 
 type GithubRelease = {
   tag_name?: string;
@@ -24,6 +28,16 @@ export type InstallerUpdateStatus = {
   updateAvailable: boolean;
   canInstall: boolean;
   blockedReason?: string;
+  job?: InstallerUpdateJob;
+};
+
+export type InstallerUpdateJob = {
+  id: string;
+  state: "running" | "success" | "failed";
+  startedAt: string;
+  finishedAt?: string;
+  message?: string;
+  installedVersion?: string;
 };
 
 function installRoot() {
@@ -36,6 +50,39 @@ function currentVersion() {
     return existsSync(versionFile) ? readFileSync(versionFile, "utf8").trim() || "未知版本" : "开发环境";
   } catch {
     return "未知版本";
+  }
+}
+
+function updateStatusFile() {
+  return join(installRoot(), "update-status.json");
+}
+
+function readUpdateJob(): InstallerUpdateJob | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(updateStatusFile(), "utf8")) as Partial<InstallerUpdateJob>;
+    if (!parsed.id || !parsed.startedAt || !parsed.state || !["running", "success", "failed"].includes(parsed.state)) return undefined;
+    const job: InstallerUpdateJob = {
+      id: String(parsed.id),
+      state: parsed.state as InstallerUpdateJob["state"],
+      startedAt: String(parsed.startedAt),
+      ...(parsed.finishedAt ? { finishedAt: String(parsed.finishedAt) } : {}),
+      ...(parsed.message ? { message: String(parsed.message) } : {}),
+      ...(parsed.installedVersion ? { installedVersion: String(parsed.installedVersion) } : {}),
+    };
+    if (job.state === "running") {
+      const startedAt = Date.parse(job.startedAt);
+      if (!Number.isFinite(startedAt) || Date.now() - startedAt > STALE_JOB_MS) {
+        return {
+          ...job,
+          state: "failed",
+          finishedAt: new Date().toISOString(),
+          message: "上一次更新任务没有正常结束，已自动解除占用，可以重新发起更新。",
+        };
+      }
+    }
+    return job;
+  } catch {
+    return undefined;
   }
 }
 
@@ -85,11 +132,14 @@ function updaterAvailable() {
 
 export async function checkInstallerUpdate(): Promise<InstallerUpdateStatus> {
   const [current, release] = await Promise.all([Promise.resolve(currentVersion()), latestRelease()]);
+  const job = readUpdateJob();
   const updateAvailable = hasNewerVersion(current, release.version);
   const localEnvironment = process.platform !== "linux";
   const blockedReason = localEnvironment
     ? "当前是本地开发环境，不能自动安装 Linux 服务包；可下载后在 Linux 服务器手动安装。"
-    : !updaterAvailable()
+    : job?.state === "running"
+      ? "已有更新任务正在后台执行，请等待服务恢复后重新检查。"
+      : !updaterAvailable()
       ? "当前安装包尚未包含自动更新助手；请先手动安装一次最新安装包，之后即可在页面内自动更新。"
       : undefined;
   return {
@@ -99,8 +149,9 @@ export async function checkInstallerUpdate(): Promise<InstallerUpdateStatus> {
     installerUrl: release.installerUrl,
     environment: localEnvironment ? "local" : "linux",
     updateAvailable,
-    canInstall: updateAvailable && !blockedReason,
+    canInstall: updateAvailable && !blockedReason && job?.state !== "running",
     blockedReason,
+    ...(job ? { job } : {}),
   };
 }
 
@@ -122,5 +173,5 @@ export async function startInstallerUpdate() {
     }
     throw new Error(details ? `无法启动更新助手：${details}` : "无法启动更新助手。请确认服务账号具备受控更新权限。");
   }
-  return { ...status, started: true };
+  return { ...status, job: readUpdateJob() ?? status.job, started: true };
 }
