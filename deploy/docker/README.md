@@ -7,8 +7,8 @@
 工作流文件是 `.github/workflows/publish-docker.yml`。
 
 - Release 发布时自动构建：`ghcr.io/zhougepeng/requirement-platform:<tag>` 和 `:latest`。
-- 也可以在 GitHub 的 **Actions → Publish Docker image → Run workflow** 中填写已有 Release tag，例如 `v0.3.35`。
-- 镜像使用 Release tag 的源码；Dockerfile 和 `.dockerignore` 使用 `main` 中的构建定义。
+- 也可以在 GitHub 的 **Actions → Publish Docker image → Run workflow** 中填写镜像版本，例如 `v0.3.36`。如果该 tag 已存在，使用该 tag 的源码；如果 tag 尚未存在，手动运行会使用当前 `main` 构建。
+- Release 发布时使用 Release tag 的源码；Dockerfile 和 `.dockerignore` 使用 `main` 中的构建定义。正式生产版本建议先创建并发布对应 Release。
 
 GHCR 镜像如果设为 private，服务器必须预先执行一次只读登录，例如使用只有 `read:packages` 权限的 PAT：
 
