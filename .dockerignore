@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.gitignore
+.env*
+data
+*.log
+archive
+deploy/archive
+docs
+coverage

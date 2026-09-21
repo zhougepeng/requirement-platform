@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Host-side bridge. The web container writes a validated version request into
+# the shared data directory; only this root-owned process can pull and restart
+# the production container.
+PROJECT_DIR="${REQUIREMENT_PLATFORM_DOCKER_PROJECT_DIR:-/opt/requirement-platform}"
+COMPOSE_FILE="${REQUIREMENT_PLATFORM_DOCKER_COMPOSE_FILE:-$PROJECT_DIR/docker-compose.yml}"
+DATA_DIR="${REQUIREMENT_PLATFORM_DOCKER_DATA_DIR:-$PROJECT_DIR/data}"
+REQUEST_FILE="${REQUIREMENT_PLATFORM_DOCKER_UPDATE_REQUEST_FILE:-$DATA_DIR/requirement-platform/update-request}"
+STATUS_FILE="${REQUIREMENT_PLATFORM_DOCKER_UPDATE_STATUS_FILE:-$DATA_DIR/requirement-platform/update-status.json}"
+LOG_FILE="${REQUIREMENT_PLATFORM_DOCKER_UPDATE_LOG_FILE:-$PROJECT_DIR/docker-update.log}"
+CONTAINER_NAME="${REQUIREMENT_PLATFORM_CONTAINER_NAME:-requirement-platform}"
+IMAGE="${REQUIREMENT_PLATFORM_DOCKER_IMAGE:-ghcr.io/zhougepeng/requirement-platform}"
+POLL_SECONDS="${REQUIREMENT_PLATFORM_DOCKER_UPDATE_POLL_SECONDS:-2}"
+HEALTH_TIMEOUT_SECONDS="${REQUIREMENT_PLATFORM_DOCKER_HEALTH_TIMEOUT_SECONDS:-180}"
+LOCK_DIR="$DATA_DIR/.requirement-platform-docker-update-lock"
+
+if [[ "${EUID}" -ne 0 ]]; then
+  echo "This updater must run as root." >&2
+  exit 1
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is required." >&2
+  exit 1
+fi
+if ! [[ "$POLL_SECONDS" =~ ^[1-9][0-9]*$ && "$HEALTH_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Polling and health timeout must be positive integers." >&2
+  exit 1
+fi
+if ! [[ "$IMAGE" =~ ^[a-z0-9./_-]+(/[a-z0-9._-]+)*$ ]]; then
+  echo "The configured Docker image is not allowed: $IMAGE" >&2
+  exit 1
+fi
+
+compose() {
+  docker compose --project-directory "$PROJECT_DIR" --file "$COMPOSE_FILE" "$@"
+}
+
+write_status() {
+  local state="$1"
+  local message="$2"
+  local finished_at="${3:-}"
+  local installed_version="${4:-}"
+  local temporary_status="$STATUS_FILE.$$"
+  install -d -m 775 "$(dirname "$STATUS_FILE")"
+  {
+    printf '{"id":"%s","state":"%s","startedAt":"%s"' "$JOB_ID" "$state" "$JOB_STARTED_AT"
+    if [[ -n "$finished_at" ]]; then
+      printf ',"finishedAt":"%s"' "$finished_at"
+    fi
+    if [[ -n "$message" ]]; then
+      printf ',"message":"%s"' "$message"
+    fi
+    if [[ -n "$installed_version" ]]; then
+      printf ',"installedVersion":"%s"' "$installed_version"
+    fi
+    printf '}\n'
+  } > "$temporary_status"
+  chmod 664 "$temporary_status"
+  mv -f "$temporary_status" "$STATUS_FILE"
+}
+
+current_version() {
+  docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$CONTAINER_NAME" 2>/dev/null || true
+}
+
+wait_for_health() {
+  local elapsed=0
+  while (( elapsed < HEALTH_TIMEOUT_SECONDS )); do
+    local state
+    state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+    case "$state" in
+      healthy) return 0 ;;
+      unhealthy|dead|exited) return 1 ;;
+    esac
+    sleep 3
+    elapsed=$((elapsed + 3))
+  done
+  return 1
+}
+
+run_update() {
+  local version="$1"
+  local previous_version="$2"
+  JOB_ID="$(date +%s)-$RANDOM"
+  JOB_STARTED_AT="$(date -Is)"
+  write_status "running" "正在拉取 Docker 镜像。"
+  export REQUIREMENT_PLATFORM_DOCKER_IMAGE="$IMAGE"
+  export REQUIREMENT_PLATFORM_DOCKER_VERSION="$version"
+  if ! compose pull requirement-platform >>"$LOG_FILE" 2>&1 || ! compose up -d --no-deps --force-recreate requirement-platform >>"$LOG_FILE" 2>&1 || ! wait_for_health; then
+    write_status "failed" "Docker 镜像更新失败，上一版本可能已恢复。" "$(date -Is)" "$previous_version"
+    if [[ "$previous_version" =~ ^v[0-9][0-9A-Za-z._-]{0,63}$ ]]; then
+      export REQUIREMENT_PLATFORM_DOCKER_VERSION="$previous_version"
+      compose pull requirement-platform >>"$LOG_FILE" 2>&1 || true
+      compose up -d --no-deps --force-recreate requirement-platform >>"$LOG_FILE" 2>&1 || true
+    fi
+    return 1
+  fi
+  write_status "success" "Docker 镜像更新完成，服务已恢复。" "$(date -Is)" "$version"
+  echo "[$(date -Is)] Updated to $version." >>"$LOG_FILE"
+  return 0
+}
+
+watch_requests() {
+  install -d -m 775 "$DATA_DIR" "$(dirname "$REQUEST_FILE")" "$(dirname "$STATUS_FILE")"
+  while true; do
+    if [[ -f "$REQUEST_FILE" ]]; then
+      if mkdir "$LOCK_DIR" 2>/dev/null; then
+        request="$(tr -d '[:space:]' < "$REQUEST_FILE")"
+        rm -f "$REQUEST_FILE"
+        if [[ "$request" =~ ^v[0-9][0-9A-Za-z._-]{0,63}$ ]]; then
+          previous="$(current_version)"
+          run_update "$request" "$previous" || true
+        else
+          JOB_ID="$(date +%s)-$RANDOM"
+          JOB_STARTED_AT="$(date -Is)"
+          write_status "failed" "更新版本号格式不受支持。" "$(date -Is)"
+        fi
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+      fi
+    fi
+    sleep "$POLL_SECONDS"
+  done
+}
+
+case "${1:-}" in
+  --watch) watch_requests ;;
+  *) echo "Usage: $0 --watch" >&2; exit 2 ;;
+esac

@@ -1,0 +1,28 @@
+services:
+  requirement-platform:
+    image: ${REQUIREMENT_PLATFORM_DOCKER_IMAGE:-ghcr.io/zhougepeng/requirement-platform}:${REQUIREMENT_PLATFORM_DOCKER_VERSION:-latest}
+    container_name: ${REQUIREMENT_PLATFORM_CONTAINER_NAME:-requirement-platform}
+    restart: unless-stopped
+    env_file:
+      - ${REQUIREMENT_PLATFORM_ENV_FILE:-.env.local}
+    environment:
+      NODE_ENV: production
+      APP_VERSION: ${REQUIREMENT_PLATFORM_DOCKER_VERSION:-latest}
+      REQUIREMENT_PLATFORM_UPDATE_MODE: docker
+      REQUIREMENT_PLATFORM_DOCKER_IMAGE: ${REQUIREMENT_PLATFORM_DOCKER_IMAGE:-ghcr.io/zhougepeng/requirement-platform}
+      REQUIREMENT_PLATFORM_DOCKER_UPDATE_ENABLED: "true"
+      REQUIREMENT_PLATFORM_DATA_DIR: /app/data/requirement-platform
+      REQUIREMENT_PLATFORM_PUBLISHED_DEMO_DIR: /app/data/requirement-platform/published-demos
+      REQUIREMENT_PLATFORM_DOCKER_VERSION_FILE: /app/VERSION
+      REQUIREMENT_PLATFORM_DOCKER_UPDATE_REQUEST_FILE: /app/data/requirement-platform/update-request
+      REQUIREMENT_PLATFORM_UPDATE_STATUS_FILE: /app/data/requirement-platform/update-status.json
+    ports:
+      - ${REQUIREMENT_PLATFORM_PORT:-3000}:3000
+    volumes:
+      - ${REQUIREMENT_PLATFORM_DATA_HOST_DIR:-./data}:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s

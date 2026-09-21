@@ -1,0 +1,15 @@
+[Unit]
+Description=Requirement Platform Docker update bridge
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/requirement-platform/docker-updater.env
+ExecStart=/usr/local/sbin/requirement-platform-docker-updater --watch
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

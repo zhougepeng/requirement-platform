@@ -6,5 +6,6 @@
 
 - Windows：见 [Windows 服务器部署](windows-server.md) 与 [GitHub 自动部署](windows/github-actions.md)。
 - Linux：可使用 [GitHub 自动部署](linux/github-actions.md)，或下载 [Linux x64 一键安装包](linux/installer.md)。
+- Docker：见 [Docker 镜像部署与页面更新](docker/README.md)。
 
 完整容器化实验配置已备份到 `archive/full-stack-20260825/`，它不是默认部署方案。
