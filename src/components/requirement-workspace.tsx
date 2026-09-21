@@ -6,6 +6,7 @@ import { DemoCommentFrame } from "@/components/demo-comment-frame";
 import { ModelManager } from "@/components/model-manager";
 import { DifyKnowledgeSettings } from "@/components/dify-knowledge-settings";
 import { MaterialLibrary } from "@/components/material-library";
+import { DemandPool } from "@/components/demand-pool";
 import { EmployeeManager } from "@/components/employee-manager";
 import { GithubUpdateManager } from "@/components/github-update-manager";
 import { PersonalAccessTokenManager } from "@/components/personal-access-token-manager";
@@ -47,7 +48,7 @@ import type {
 } from "@/lib/types";
 
 type Tab = "demo" | "prd" | "split" | "test-cases" | "versions";
-type View = "board" | "detail" | "projects" | "requirements" | "materials" | "my-requirements" | "assigned" | "logs";
+type View = "board" | "detail" | "projects" | "requirements" | "materials" | "demand-pool" | "my-requirements" | "assigned" | "logs";
 export type WorkspaceView = Exclude<View, "detail">;
 type ApiResponse<T> =
   { data: T; error?: never } | { data?: never; error: string };
@@ -2025,6 +2026,13 @@ export function RequirementWorkspace({
               <Icon name="file" />
               <span>资料库</span>
             </button>
+            <button
+              className={"nav-item " + (view === "demand-pool" ? "is-selected" : "")}
+              onClick={() => setView("demand-pool")}
+            >
+              <Icon name="file" />
+              <span>需求池</span>
+            </button>
             <div className="nav-caption nav-caption-with-action">
               <span>项目目录</span>
               {currentUser.canPublish ? (
@@ -2312,6 +2320,8 @@ export function RequirementWorkspace({
           />
         ) : view === "materials" ? (
           <MaterialLibrary projects={projects} canEdit={currentUser.canPublish} />
+        ) : view === "demand-pool" ? (
+          <DemandPool projects={projects} canEdit={currentUser.canPublish} />
         ) : view === "logs" ? (
           <RequirementAuditLogPage />
         ) : view === "projects" || (view === "requirements" && !activeProject) ? (

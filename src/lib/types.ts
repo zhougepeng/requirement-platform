@@ -169,6 +169,66 @@ export type RequirementSummary = {
   assignedTesterIds?: string[];
 };
 
+export type DemandPoolStatus = "pending" | "evaluating" | "entered" | "closed";
+export type DemandPoolValue = "high" | "medium" | "low" | "pending";
+export type DemandPoolCategory = "新功能" | "功能优化" | "问题反馈" | "客户诉求" | "竞品信息" | "其他";
+export type DemandPoolSourceType = "paste" | "feishu_base";
+export type DemandPoolSourceStatus = "success" | "partial" | "error";
+
+export type DemandPoolSyncSummary = {
+  created: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+  errors?: string[];
+};
+
+export type DemandPoolSourceTable = {
+  tableId: string;
+  name: string;
+};
+
+export type DemandPoolSource = {
+  id: string;
+  name: string;
+  url: string;
+  baseId: string;
+  tableId: string;
+  tableName: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastSyncedAt?: string;
+  lastSyncStatus?: DemandPoolSourceStatus;
+  lastSyncSummary?: DemandPoolSyncSummary;
+  lastSyncError?: string;
+  /** Soft-deleted sources remain as tombstones so re-linking cannot duplicate records. */
+  deletedAt?: string;
+};
+
+export type DemandPoolItem = {
+  id: string;
+  title: string;
+  category: DemandPoolCategory;
+  projectId?: string;
+  detail: string;
+  value: DemandPoolValue;
+  proposer?: string;
+  sourceType: DemandPoolSourceType;
+  sourceId?: string;
+  sourceRecordId?: string;
+  sourceUpdatedAt?: string;
+  sourceHash?: string;
+  rawContent: string;
+  relatedRequirementCodes: string[];
+  status: DemandPoolStatus;
+  closedReason?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type DemandPoolDraft = Pick<DemandPoolItem, "title" | "category" | "projectId" | "detail" | "value" | "proposer">;
+
 export type Project = {
   id: string;
   name: string;
