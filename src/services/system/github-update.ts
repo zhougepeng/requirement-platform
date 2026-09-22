@@ -54,7 +54,7 @@ function updateMode(): UpdateMode {
 }
 
 function dockerImage() {
-  return process.env.REQUIREMENT_PLATFORM_DOCKER_IMAGE?.trim() || "ghcr.io/zhougepeng/requirement-platform";
+  return process.env.REQUIREMENT_PLATFORM_DOCKER_IMAGE?.trim() || "qpww/requirement-platform";
 }
 
 function dockerVersionFile() {

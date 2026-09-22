@@ -6,6 +6,8 @@ RUN npm ci
 FROM node:22-alpine AS build
 WORKDIR /app
 ARG APP_VERSION=dev
+ARG NEXT_PUBLIC_BASE_PATH
+ENV NEXT_PUBLIC_BASE_PATH=$NEXT_PUBLIC_BASE_PATH
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

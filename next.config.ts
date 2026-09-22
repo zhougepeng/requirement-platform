@@ -1,7 +1,11 @@
 import type { NextConfig } from "next";
 
+const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH?.trim().replace(/^\/+|\/+$/g, "");
+const basePath = configuredBasePath ? "/" + configuredBasePath : undefined;
+
 const nextConfig: NextConfig = {
   output: "standalone",
+  ...(basePath ? { basePath } : {}),
   // Codex's local preview forwards dev resources through a loopback origin.
   // Keep this development-only allowlist narrow so Turbopack chunks and HMR
   // are not rejected with 403 when the page itself is opened on 127.0.0.1.

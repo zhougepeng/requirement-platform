@@ -1,22 +1,23 @@
 # Docker 镜像部署与页面更新
 
-这套方式由 GitHub Actions 在 GitHub 托管 Runner 上构建并发布 GHCR 镜像，服务器不安装 GitHub 自托管 Runner，也不在服务器执行 `npm install` 或 `npm run build`。
+这套方式由 GitHub Actions 在 GitHub 托管 Runner 上重新构建并发布 Docker Hub 镜像，服务器不安装 GitHub 自托管 Runner，也不在服务器执行 `npm install` 或 `npm run build`。
 
 ## 发布镜像
 
 工作流文件是 `.github/workflows/publish-docker.yml`。
 
-- Release 发布时自动构建：`ghcr.io/zhougepeng/requirement-platform:<tag>` 和 `:latest`。
+- Release 发布时自动重新构建：`qpww/requirement-platform:<tag>` 和 `:latest`。
 - 也可以在 GitHub 的 **Actions → Publish Docker image → Run workflow** 中填写镜像版本，例如 `v0.3.36`。如果该 tag 已存在，使用该 tag 的源码；如果 tag 尚未存在，手动运行会使用当前 `main` 构建。
 - Release 发布时使用 Release tag 的源码；Dockerfile 和 `.dockerignore` 使用 `main` 中的构建定义。正式生产版本建议先创建并发布对应 Release。
 
-GHCR 镜像如果设为 private，服务器必须预先执行一次只读登录，例如使用只有 `read:packages` 权限的 PAT：
+GitHub 仓库需要配置以下 Actions Secrets，供工作流登录 Docker Hub：
 
-```bash
-echo "$GHCR_READ_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+```text
+DOCKERHUB_USERNAME=qpww
+DOCKERHUB_TOKEN=<Docker Hub access token>
 ```
 
-不要把 PAT 写进仓库、Compose 文件、网页环境变量或截图。
+`DOCKERHUB_TOKEN` 只放在 GitHub Secrets 中，不要写进仓库、Compose 文件、网页环境变量或截图。每次发布必须执行 Docker build，服务器只负责拉取指定 tag 并重建容器。
 
 ## 一次性部署
 
@@ -37,9 +38,18 @@ REQUIREMENT_PLATFORM_DOCKER_VERSION=v0.3.35 docker compose up -d
 配置重点：
 
 ```dotenv
-REQUIREMENT_PLATFORM_DOCKER_IMAGE=ghcr.io/zhougepeng/requirement-platform
+REQUIREMENT_PLATFORM_DOCKER_IMAGE=qpww/requirement-platform
+REQUIREMENT_PLATFORM_CONTAINER_NAME=ai-app-requirement-platform
 REQUIREMENT_PLATFORM_DOCKER_UPDATE_ENABLED=true
 REQUIREMENT_PLATFORM_DATA_DIR=/app/data/requirement-platform
+```
+
+生产镜像配置应为：
+
+```dotenv
+REQUIREMENT_PLATFORM_DOCKER_IMAGE=qpww/requirement-platform
+REQUIREMENT_PLATFORM_DOCKER_VERSION=v0.3.36
+REQUIREMENT_PLATFORM_CONTAINER_NAME=ai-app-requirement-platform
 ```
 
 生产环境的 `APP_VERSION` 应始终使用实际镜像 tag，不要使用 `latest` 作为版本标识，否则页面无法可靠判断是否有更新。
@@ -59,11 +69,11 @@ sudo systemctl enable --now requirement-platform-docker-updater.service
 
 确保宿主机变量中的 `PROJECT_DIR`、Compose 文件、数据目录和容器名与实际部署一致。更新桥接只接受 `v...` 版本号，固定使用配置中的镜像仓库，拉取后健康检查失败会尝试恢复上一版本。
 
-系统更新页面需要在容器环境中设置：
+Compose 服务名固定为 `requirement-platform`，容器名固定为 `ai-app-requirement-platform`。系统更新页面需要在容器环境中设置：
 
 ```dotenv
 REQUIREMENT_PLATFORM_UPDATE_MODE=docker
-REQUIREMENT_PLATFORM_DOCKER_IMAGE=ghcr.io/zhougepeng/requirement-platform
+REQUIREMENT_PLATFORM_DOCKER_IMAGE=qpww/requirement-platform
 REQUIREMENT_PLATFORM_DOCKER_UPDATE_ENABLED=true
 REQUIREMENT_PLATFORM_DATA_DIR=/app/data/requirement-platform
 REQUIREMENT_PLATFORM_DOCKER_UPDATE_REQUEST_FILE=/app/data/requirement-platform/update-request
@@ -74,12 +84,12 @@ REQUIREMENT_PLATFORM_UPDATE_STATUS_FILE=/app/data/requirement-platform/update-st
 
 ## 当前服务器的限制
 
-当前 `ai-app` 上的 `zhougepeng` 账号只能执行服务器管理员预先放行的 `requirement-platformctl` 子命令，不能直接读取 Docker、修改 Compose 或安装 systemd 服务。因此不能把上述桥接服务直接安装到当前服务器，也不能把现有 `requirement-platformctl publish` 未确认地当作“按指定 GHCR tag 更新”。
+当前 `ai-app` 上的 `zhougepeng` 账号只能执行服务器管理员预先放行的 `requirement-platformctl` 子命令，不能直接读取 Docker、修改 Compose 或安装 systemd 服务。因此不能把上述桥接服务直接安装到当前服务器，也不能把现有 `requirement-platformctl publish` 未确认地当作“按指定 Docker Hub tag 更新”。
 
 在现有服务器上启用页面更新前，需要管理员完成一次接入：
 
-1. 确认现有部署的 Compose 项目目录、数据挂载目录、容器名和 GHCR 登录方式。
-2. 安装并启用更新桥接服务，或在 `requirement-platformctl` 中增加等价的受控 `publish-image <tag>` 能力。
+1. 确认现有部署的 Compose 项目目录、数据挂载目录、容器名和 Docker Hub 登录方式。
+2. 安装并启用更新桥接服务，或在 `requirement-platformctl` 中增加等价的受控 `publish-image <tag>` 能力；该能力必须执行 `docker compose pull requirement-platform` 和 `docker compose up -d --no-deps --force-recreate requirement-platform`。
 3. 将页面容器的 `REQUIREMENT_PLATFORM_UPDATE_MODE=docker` 等变量加入实际环境，并重启容器。
 4. 通过页面检查到新 Release 后，先在非高峰时段用一个新 tag 做一次更新和回滚演练。
 
